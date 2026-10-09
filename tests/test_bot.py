@@ -616,3 +616,17 @@ class TestSessionCookies(unittest.TestCase):
             acc.method("post", "runner/", {}, {})
         self.assertEqual(sent[0], "golden_key=" + "g" * 32 + "; PHPSESSID=old")
         self.assertEqual(sent[1], "golden_key=" + "g" * 32 + "; PHPSESSID=new; cf_token=abc")
+
+
+class TestUserAgent(BotTestCase):
+    def test_set_user_agent(self):
+        self.acc.get = MagicMock()
+        self.acc.user_agent = None
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/129.0 Safari/537.36"
+        self.press("ua")
+        self.type_text("hello")
+        self.assertNotEqual(self.storage.config.data["funpay"]["user_agent"], "hello")
+        self.type_text(ua)
+        self.assertEqual(self.storage.config.data["funpay"]["user_agent"], ua)
+        self.assertEqual(self.acc.user_agent, ua)
+        self.acc.get.assert_called_once_with(update_phpsessid=True)

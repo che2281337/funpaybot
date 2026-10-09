@@ -68,6 +68,7 @@ class PanelMixin:
             "bl": self.cb_bl, "bl_add": self.cb_bl_add, "bl_d": self.cb_bl_delete,
             "set": self.cb_set, "set_t": self.cb_set_toggle, "adm": self.cb_admins, "adm_d": self.cb_admin_delete,
             "logs": self.cb_logs, "pwd": self.cb_password, "gk": self.cb_golden_key,
+            "ua": self.cb_user_agent,
             "rst": self.cb_restart, "rsty": self.cb_restart_yes,
             # прокси
             "px": self.cb_px, "px_set": self.cb_px_set, "px_ty": self.cb_px_type, "px_chk": self.cb_px_check,
@@ -82,6 +83,7 @@ class PanelMixin:
             "ad_edit": self.st_ad_edit, "ad_rekey": self.st_ad_rekey,
             "tp_add": self.st_tp_add, "bl_add": self.st_bl_add,
             "pwd": self.st_password, "gk": self.st_golden_key,
+            "ua": self.st_user_agent,
             "px": self.st_px,
         })
         self.pending_proxy: dict[int, str] = {}
@@ -580,6 +582,7 @@ class PanelMixin:
         rows = [btn(f"{onoff(self.storage.setting(k))} {name}", f"set_t:{k}") for k, name in SETTINGS_NAMES.items()]
         rows += [[btn("👥 Администраторы", "adm"), btn("📄 Логи", "logs")],
                  [btn("🔑 Сменить пароль", "pwd"), btn("🍪 Сменить golden_key", "gk")],
+                 btn("🧭 Сменить User-Agent", "ua"),
                  btn(f"🌐 Прокси: {proxy_type(self.storage.proxy)}", "px"),
                  [btn("🔄 Перезапуск", "rst"), btn(BACK, "menu")]]
         ctx.show("🛠 <b>Настройки</b>\n\n<b>Вечный онлайн</b> — бот постоянно держит аккаунт в сети.\n"
@@ -641,6 +644,34 @@ class PanelMixin:
         except Exception:
             pass
         self._done(message, "✅ Пароль изменён.", "set")
+
+    def cb_user_agent(self, ctx: Ctx):
+        current = self.storage.config.data["funpay"].get("user_agent") or "—"
+        self.ask(ctx, "ua", "🧭 Отправьте <b>User-Agent</b> браузера, в котором выполнен вход на FunPay "
+                            "(именно того, откуда взят golden_key).\n\n"
+                            "Как узнать: откройте в этом браузере https://www.whatsmyua.info и скопируйте строку, "
+                            "или нажмите F12 → Console и введите <code>navigator.userAgent</code>.\n\n"
+                            f"Сейчас: <code>{esc(current)}</code>")
+
+    def st_user_agent(self, message: tg.Message, state: dict):
+        if not (text := self._text_only(message)):
+            return
+        ua = text.strip().strip("'\"")
+        if not ua.startswith("Mozilla/") or len(ua) < 40:
+            self.bot.reply_to(message, "Не похоже на User-Agent — он начинается с <code>Mozilla/5.0</code>. "
+                                       "Попробуйте ещё раз или /cancel.")
+            return
+        with self.storage.config.lock:
+            self.storage.config.data["funpay"]["user_agent"] = ua
+            self.storage.config.save()
+        self.c.account.user_agent = ua
+        self.states.pop(message.from_user.id, None)
+        try:
+            self.c.account.get(update_phpsessid=True)
+            result = f"✅ User-Agent сохранён, сессия FunPay обновлена (аккаунт <b>{esc(self.c.account.username)}</b>)."
+        except Exception as e:
+            result = f"✅ User-Agent сохранён, но обновить сессию не удалось: <code>{esc(e)}</code>"
+        self.bot.send_message(message.chat.id, result, reply_markup=kb(btn(BACK, "set")))
 
     def cb_golden_key(self, ctx: Ctx):
         self.ask(ctx, "gk", "🍪 Отправьте новый <code>golden_key</code> (32 символа). После этого бот перезапустится.")
