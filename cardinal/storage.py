@@ -25,6 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "token": "",
         "password_hash": "",
         "admins": [],
+        "use_proxy": False,
     },
     "settings": {
         "auto_raise": True,
@@ -154,6 +155,13 @@ class Storage:
             "FUNPAY_PROXY": ("funpay", "proxy"),
             "TELEGRAM_TOKEN": ("telegram", "token"),
         }
+        if os.environ.get("FUNPAY_PROXY"):
+            from .proxy import parse_proxy
+            try:
+                os.environ["FUNPAY_PROXY"] = parse_proxy(os.environ["FUNPAY_PROXY"])
+            except ValueError:
+                logger.error("FUNPAY_PROXY задан в неверном формате — игнорирую.")
+                os.environ.pop("FUNPAY_PROXY")
         for env, (section, key) in env_map.items():
             if (value := os.environ.get(env)) and cfg[section][key] != value:
                 cfg[section][key] = value
@@ -191,6 +199,14 @@ class Storage:
             self.settings["notify"][key] = not self.settings["notify"].get(key)
             self.config.save()
             return self.settings["notify"][key]
+
+    @property
+    def proxy(self) -> str:
+        return self.config.data["funpay"].get("proxy") or ""
+
+    @property
+    def telegram_uses_proxy(self) -> bool:
+        return bool(self.config.data["telegram"].get("use_proxy")) and bool(self.proxy)
 
     @property
     def admins(self) -> list[int]:

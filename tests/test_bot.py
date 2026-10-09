@@ -422,3 +422,145 @@ class TestUtils(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProxy(BotTestCase):
+    def test_parse_formats(self):
+        from cardinal.proxy import mask, parse_proxy
+        self.assertEqual(parse_proxy("1.2.3.4:1080", "socks5"), "socks5://1.2.3.4:1080")
+        self.assertEqual(parse_proxy("1.2.3.4:1080:user:p@ss", "socks5"), "socks5://user:p%40ss@1.2.3.4:1080")
+        self.assertEqual(parse_proxy("user:pass@1.2.3.4:8080"), "http://user:pass@1.2.3.4:8080")
+        self.assertEqual(parse_proxy("SOCKS5://u:p@host.example:1080/", "http"), "socks5://u:p@host.example:1080")
+        self.assertEqual(parse_proxy("socks://1.2.3.4:1"), "socks5://1.2.3.4:1")
+        for bad in ("", "1.2.3.4", "ftp://1.2.3.4:21", "1.2.3.4:99999", "user@1.2.3.4:80"):
+            with self.assertRaises(ValueError, msg=bad):
+                parse_proxy(bad)
+        self.assertEqual(mask("socks5://u:secret@1.2.3.4:1080"), "socks5://u:****@1.2.3.4:1080")
+
+    def _ok(self, **kw):
+        res = {"ok": True, "ip": "5.6.7.8", "ping": 100, "funpay": True, "telegram": True, "error": None}
+        res.update(kw)
+        return res
+
+    def test_set_proxy_from_telegram(self):
+        import telebot
+        from tg_bot import panel
+        panel.check_proxy = lambda p: self._ok()
+        self.press("px_ty:socks5")
+        self.type_text("1.2.3.4:1080:user:pass")
+        self.assertEqual(self.storage.proxy, "socks5://user:pass@1.2.3.4:1080")
+        self.assertEqual(self.c.account.proxy["https"], "socks5://user:pass@1.2.3.4:1080")
+        # set_proxy применяет прокси к аккаунту
+        self.c.account = SimpleNamespace(proxy=None)
+        self.c.set_proxy("socks5://1.2.3.4:1080")
+        self.assertEqual(self.c.account.proxy, {"http": "socks5://1.2.3.4:1080", "https": "socks5://1.2.3.4:1080"})
+        # Telegram через прокси
+        self.assertIsNone(telebot.apihelper.proxy)
+        self.press("px_tg")
+        self.assertEqual(telebot.apihelper.proxy["https"], "socks5://1.2.3.4:1080")
+        self.press("px_offy")
+        self.assertEqual(self.storage.proxy, "")
+        self.assertIsNone(telebot.apihelper.proxy)
+
+    def test_bad_proxy_not_saved_and_tg_protected(self):
+        from tg_bot import panel
+        panel.check_proxy = lambda p: self._ok(funpay=False, telegram=False, ip=None, error="таймаут")
+        self.press("px_ty:http")
+        self.type_text("1.2.3.4:8080")
+        self.assertEqual(self.storage.proxy, "")
+        self.press("px_force")
+        self.assertEqual(self.storage.proxy, "http://1.2.3.4:8080")
+        self.press("px_tg")  # Telegram через прокси недоступен — не включаем
+        self.assertFalse(self.storage.telegram_uses_proxy)
+
+    def test_menus(self):
+        for data in ("px", "px_set", "px_off"):
+            self.tg.bot.reset_mock()
+            self.press(data)
+            self.assertFalse([t for t in self.tg_texts() if t.startswith("❌ Ошибка")], data)
+
+    def tearDown(self):
+        import telebot
+        from cardinal import proxy
+        from tg_bot import panel
+        panel.check_proxy = proxy.check_proxy
+        telebot.apihelper.proxy = None
+        super().tearDown()
+
+
+class TestRealSocks5(unittest.TestCase):
+    """Поднимает локальный SOCKS5-сервер (с логином/паролем) и делает через него HTTP-запрос."""
+
+    def test_request_through_socks5(self):
+        import http.server
+        import socket
+        import socketserver
+        import struct
+        import threading
+
+        import requests
+        from cardinal.proxy import parse_proxy, to_requests
+
+        class Hello(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "15")
+                self.end_headers()
+                self.wfile.write(b"hello via socks")
+
+            def log_message(self, *a):
+                pass
+
+        web = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Hello)
+        threading.Thread(target=web.serve_forever, daemon=True).start()
+        used = []
+
+        class Socks5(socketserver.BaseRequestHandler):
+            def handle(self):
+                s = self.request
+                ver, n = s.recv(2)
+                methods = s.recv(n)
+                assert 2 in methods
+                s.sendall(b"\x05\x02")
+                s.recv(1)
+                user = s.recv(s.recv(1)[0])
+                pwd = s.recv(s.recv(1)[0])
+                ok = (user, pwd) == (b"user", b"pass")
+                s.sendall(b"\x01" + (b"\x00" if ok else b"\x01"))
+                if not ok:
+                    return
+                _, cmd, _, atyp = s.recv(4)
+                if atyp == 1:
+                    host = socket.inet_ntoa(s.recv(4))
+                else:
+                    host = s.recv(s.recv(1)[0]).decode()
+                port = struct.unpack(">H", s.recv(2))[0]
+                used.append((host, port))
+                remote = socket.create_connection((host, port))
+                s.sendall(b"\x05\x00\x00\x01" + socket.inet_aton("127.0.0.1") + struct.pack(">H", port))
+
+                def pipe(a, b):
+                    try:
+                        while data := a.recv(4096):
+                            b.sendall(data)
+                    except OSError:
+                        pass
+                    finally:
+                        try:
+                            b.shutdown(socket.SHUT_WR)
+                        except OSError:
+                            pass
+                threading.Thread(target=pipe, args=(remote, s), daemon=True).start()
+                pipe(s, remote)
+
+        socks = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Socks5)
+        socks.daemon_threads = True
+        threading.Thread(target=socks.serve_forever, daemon=True).start()
+        try:
+            proxy = parse_proxy(f"127.0.0.1:{socks.server_address[1]}:user:pass", "socks5")
+            r = requests.get(f"http://127.0.0.1:{web.server_address[1]}/", proxies=to_requests(proxy), timeout=5)
+            self.assertEqual(r.text, "hello via socks")
+            self.assertEqual(used, [("127.0.0.1", web.server_address[1])])
+        finally:
+            socks.shutdown()
+            web.shutdown()

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 import telebot
 from telebot import types as tg
 
+from cardinal.proxy import to_requests
 from cardinal.utils import split_text
 
 if TYPE_CHECKING:
@@ -98,6 +99,7 @@ class BaseBot:
         self.c = cardinal
         self.storage = cardinal.storage
         token = self.storage.config.data["telegram"]["token"]
+        self.apply_proxy()
         self.bot = telebot.TeleBot(token, parse_mode="HTML", threaded=True, num_threads=6)
         self.states: dict[int, dict] = {}
         # (tg chat id, tg message id) -> (FunPay chat id, имя собеседника) — для ответа «реплаем» на уведомление
@@ -106,6 +108,10 @@ class BaseBot:
         self.state_handlers: dict[str, Callable] = {}
         self.login_attempts: dict[int, list[float]] = {}
         self._register_base()
+
+    def apply_proxy(self):
+        """Включает / выключает прокси для запросов к Telegram (действует сразу)."""
+        telebot.apihelper.proxy = to_requests(self.storage.proxy) if self.storage.telegram_uses_proxy else None
 
     # ------------------------------------------------------------------ регистрация
     def on_callback(self, name: str):

@@ -15,6 +15,7 @@ import uuid
 
 from telebot import types as tg
 
+from cardinal.proxy import FORMATS_HELP, check_proxy, mask, parse_proxy, proxy_type
 from cardinal.utils import VARIABLES_HELP, esc
 
 from .base import BACK, Ctx, btn, kb, onoff
@@ -68,6 +69,10 @@ class PanelMixin:
             "set": self.cb_set, "set_t": self.cb_set_toggle, "adm": self.cb_admins, "adm_d": self.cb_admin_delete,
             "logs": self.cb_logs, "pwd": self.cb_password, "gk": self.cb_golden_key,
             "rst": self.cb_restart, "rsty": self.cb_restart_yes,
+            # прокси
+            "px": self.cb_px, "px_set": self.cb_px_set, "px_ty": self.cb_px_type, "px_chk": self.cb_px_check,
+            "px_tg": self.cb_px_telegram, "px_off": self.cb_px_off, "px_offy": self.cb_px_off_yes,
+            "px_force": self.cb_px_force,
         })
         self.register_states({
             "ar_key": self.st_ar_key, "ar_resp": self.st_ar_resp, "ar_edit": self.st_ar_edit,
@@ -77,7 +82,9 @@ class PanelMixin:
             "ad_edit": self.st_ad_edit, "ad_rekey": self.st_ad_rekey,
             "tp_add": self.st_tp_add, "bl_add": self.st_bl_add,
             "pwd": self.st_password, "gk": self.st_golden_key,
+            "px": self.st_px,
         })
+        self.pending_proxy: dict[int, str] = {}
 
     # ------------------------------------------------------------------ helpers
     def _text_only(self, message: tg.Message) -> str | None:
@@ -573,6 +580,7 @@ class PanelMixin:
         rows = [btn(f"{onoff(self.storage.setting(k))} {name}", f"set_t:{k}") for k, name in SETTINGS_NAMES.items()]
         rows += [[btn("👥 Администраторы", "adm"), btn("📄 Логи", "logs")],
                  [btn("🔑 Сменить пароль", "pwd"), btn("🍪 Сменить golden_key", "gk")],
+                 btn(f"🌐 Прокси: {proxy_type(self.storage.proxy)}", "px"),
                  [btn("🔄 Перезапуск", "rst"), btn(BACK, "menu")]]
         ctx.show("🛠 <b>Настройки</b>\n\n<b>Вечный онлайн</b> — бот постоянно держит аккаунт в сети.\n"
                  "<b>Автовосстановление</b> — если лот выключился после продажи, бот включит его снова.\n"
@@ -654,6 +662,122 @@ class PanelMixin:
         self.states.pop(message.from_user.id, None)
         self.bot.send_message(message.chat.id, "✅ golden_key сохранён. Перезапускаюсь...")
         self._restart()
+
+    # ================================================================== прокси
+    def cb_px(self, ctx: Ctx):
+        proxy = self.storage.proxy
+        tg_on = bool(self.storage.config.data["telegram"].get("use_proxy"))
+        rows = [[btn("✏️ Задать прокси", "px_set"), btn("🧪 Проверить", "px_chk")]]
+        if proxy:
+            rows.append(btn(f"{onoff(tg_on)} Telegram тоже через прокси", "px_tg"))
+            rows.append(btn("🗑 Отключить прокси", "px_off"))
+        rows.append(btn(BACK, "set"))
+        ctx.show(f"🌐 <b>Прокси</b>\n\n"
+                 f"Текущий: <code>{esc(mask(proxy))}</code>\n"
+                 f"Тип: <b>{proxy_type(proxy)}</b>\n"
+                 f"FunPay через прокси: {onoff(proxy)}\n"
+                 f"Telegram через прокси: {onoff(self.storage.telegram_uses_proxy)}\n\n"
+                 f"Поддерживаются <b>HTTP</b>, <b>SOCKS5</b> и SOCKS4. Изменения применяются сразу, без перезапуска.\n"
+                 f"«🧪 Проверить» без прокси покажет ваш текущий IP.", kb(*rows))
+
+    def cb_px_set(self, ctx: Ctx):
+        ctx.show("🌐 <b>Выберите тип прокси</b>\n\n<i>SOCKS5h — то же, что SOCKS5, но DNS-запросы тоже идут "
+                 "через прокси (меньше утечек).</i>",
+                 kb([btn("SOCKS5", "px_ty:socks5"), btn("SOCKS5h", "px_ty:socks5h")],
+                    [btn("HTTP", "px_ty:http"), btn("SOCKS4", "px_ty:socks4")],
+                    btn(BACK, "px")))
+
+    def cb_px_type(self, ctx: Ctx, scheme: str):
+        self.ask(ctx, "px", f"✏️ Отправьте прокси <b>{scheme.upper()}</b>.\n"
+                            f"Если в строке указан другой тип (например <code>http://</code>), будет использован он.\n\n"
+                            f"{FORMATS_HELP}", scheme=scheme)
+
+    def _px_report(self, proxy: str, res: dict) -> str:
+        lines = [f"🧪 <b>Проверка</b> <code>{esc(mask(proxy) if proxy else 'без прокси')}</code>\n"]
+        if res["ip"]:
+            lines.append(f"🌍 Внешний IP: <code>{esc(res['ip'])}</code> ({res['ping']} мс)")
+        else:
+            lines.append("🌍 Внешний IP: ❌ не удалось определить")
+        lines.append(f"{'✅' if res['funpay'] else '❌'} FunPay")
+        lines.append(f"{'✅' if res['telegram'] else '❌'} Telegram")
+        if res["error"]:
+            lines.append(f"\n⚠️ {esc(res['error'])}")
+        return "\n".join(lines)
+
+    def st_px(self, message: tg.Message, state: dict):
+        if not (text := self._text_only(message)):
+            return
+        try:
+            proxy = parse_proxy(text, state.get("scheme", "http"))
+        except ValueError as e:
+            self.bot.reply_to(message, f"❌ {esc(e)}\n\n{FORMATS_HELP}")
+            return
+        try:
+            self.bot.delete_message(message.chat.id, message.message_id)  # в сообщении может быть пароль
+        except Exception:
+            pass
+        self.states.pop(message.from_user.id, None)
+        wait = self.bot.send_message(message.chat.id, "⏳ Проверяю прокси (до 30 сек)...")
+        res = check_proxy(proxy)
+        report = self._px_report(proxy, res)
+        try:
+            self.bot.delete_message(message.chat.id, wait.message_id)
+        except Exception:
+            pass
+        if not res["funpay"]:
+            self.pending_proxy[message.from_user.id] = proxy
+            self.bot.send_message(message.chat.id, report + "\n\n❗ Через этот прокси FunPay недоступен. "
+                                                            "Прокси <b>не сохранён</b>.",
+                                  reply_markup=kb([btn("💾 Сохранить всё равно", "px_force"),
+                                                   btn("✏️ Ввести другой", "px_set")], btn(BACK, "px")))
+            return
+        self._px_save(message.chat.id, proxy, res, report)
+
+    def _px_save(self, chat_id: int, proxy: str, res: dict, report: str):
+        tg_on = bool(self.storage.config.data["telegram"].get("use_proxy"))
+        note = ""
+        if tg_on and not res["telegram"]:
+            # иначе бот потеряет связь с Telegram и его нельзя будет настроить
+            tg_on = False
+            note = "\n⚠️ Telegram через этот прокси недоступен — для Telegram прокси отключён."
+        self.c.set_proxy(proxy, use_for_telegram=tg_on)
+        self.bot.send_message(chat_id, report + f"\n\n✅ Прокси сохранён и применён.{note}",
+                              reply_markup=kb(btn("➡️ К настройкам прокси", "px")))
+
+    def cb_px_force(self, ctx: Ctx):
+        proxy = self.pending_proxy.pop(ctx.user_id, None)
+        if not proxy:
+            ctx.answer("Нечего сохранять — введите прокси заново.", alert=True)
+            return
+        ctx.answer()
+        self._px_save(ctx.chat_id, proxy, {"telegram": False}, "💾 Прокси сохранён без успешной проверки.")
+
+    def cb_px_check(self, ctx: Ctx):
+        ctx.answer("⏳ Проверяю...")
+        proxy = self.storage.proxy
+        ctx.show(self._px_report(proxy, check_proxy(proxy)),
+                 kb([btn("🔄 Ещё раз", "px_chk"), btn(BACK, "px")]))
+
+    def cb_px_telegram(self, ctx: Ctx):
+        enable = not self.storage.config.data["telegram"].get("use_proxy")
+        if enable:
+            ctx.answer("⏳ Проверяю доступ к Telegram через прокси...")
+            res = check_proxy(self.storage.proxy)
+            if not res["telegram"]:
+                ctx.show("❌ Через этот прокси Telegram недоступен — включать нельзя, иначе бот потеряет связь.\n\n"
+                         + self._px_report(self.storage.proxy, res), kb(btn(BACK, "px")))
+                return
+        self.c.set_proxy(self.storage.proxy, use_for_telegram=enable)
+        self.cb_px(ctx)
+
+    def cb_px_off(self, ctx: Ctx):
+        ctx.show("🗑 Отключить прокси? FunPay и Telegram будут работать напрямую.",
+                 kb([btn("✅ Отключить", "px_offy"), btn("❌ Отмена", "px")]))
+
+    def cb_px_off_yes(self, ctx: Ctx):
+        self.c.set_proxy("")
+        ctx.answer("Прокси отключён")
+        self.cb_px(ctx)
 
     def cb_restart(self, ctx: Ctx):
         ctx.show("🔄 Перезапустить бота?", kb([btn("✅ Да", "rsty"), btn("❌ Нет", "set")]))

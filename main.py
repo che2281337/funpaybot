@@ -14,6 +14,7 @@ from logging.handlers import RotatingFileHandler
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from cardinal.core import Cardinal  # noqa: E402
+from cardinal.proxy import parse_proxy  # noqa: E402
 from cardinal.storage import Storage, hash_password  # noqa: E402
 
 
@@ -44,6 +45,14 @@ def ask(prompt: str, validator=None, secret: bool = False, default: str = "") ->
         print("  ❌ Неверное значение, попробуйте ещё раз.")
 
 
+def _valid_proxy(value: str) -> bool:
+    try:
+        parse_proxy(value)
+        return True
+    except ValueError:
+        return False
+
+
 def first_setup(storage: Storage):
     cfg = storage.config.data
     need = not cfg["funpay"]["golden_key"] or not cfg["telegram"]["token"] or not cfg["telegram"]["password_hash"]
@@ -69,8 +78,9 @@ def first_setup(storage: Storage):
         print("\n3) Пароль для входа в панель Telegram (минимум 6 символов). Его нужно будет отправить боту.")
         password = ask("   Пароль: ", lambda v: len(v) >= 6, secret=True)
         cfg["telegram"]["password_hash"] = hash_password(password)
-    proxy = ask("\n4) Прокси для FunPay (http://user:pass@ip:port) [Enter — без прокси]: ", default="-")
-    cfg["funpay"]["proxy"] = "" if proxy == "-" else proxy
+    proxy = ask("\n4) Прокси (socks5://user:pass@ip:port или http://ip:port) [Enter — без прокси]: ",
+                lambda v: _valid_proxy(v), default="-")
+    cfg["funpay"]["proxy"] = "" if proxy == "-" else parse_proxy(proxy)
     storage.config.save()
     print("\n✅ Настройки сохранены в storage/config.json. Запускаю бота...\n")
 

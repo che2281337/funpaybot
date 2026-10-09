@@ -16,6 +16,7 @@ from FunPayAPI.common.enums import MessageTypes, OrderStatuses, SubCategoryTypes
 from FunPayAPI.updater import events
 
 from .lots import LotsManager
+from .proxy import mask, to_requests
 from .raiser import Raiser
 from .storage import Storage
 from .utils import esc, format_text, normalize_command
@@ -35,8 +36,8 @@ class Cardinal:
     def __init__(self, storage: Storage):
         self.storage = storage
         fp = storage.config.data["funpay"]
-        proxy = {"http": fp["proxy"], "https": fp["proxy"]} if fp.get("proxy") else None
-        self.account = Account(fp["golden_key"], fp.get("user_agent") or None, requests_timeout=15, proxy=proxy)
+        self.account = Account(fp["golden_key"], fp.get("user_agent") or None, requests_timeout=15,
+                               proxy=to_requests(fp.get("proxy")))
         self.runner: Optional[Runner] = None
         self.tg: Optional[TGBot] = None
         self.lots = LotsManager(self)
@@ -99,6 +100,19 @@ class Cardinal:
                     self.account.method("get", "https://funpay.com/", {}, {})
             except Exception as e:
                 logger.debug(f"online_loop: {e}")
+
+    # ------------------------------------------------------------------ прокси
+    def set_proxy(self, proxy: str, use_for_telegram: Optional[bool] = None):
+        """Сохраняет и сразу применяет прокси (пустая строка — без прокси). Перезапуск не нужен."""
+        with self.storage.config.lock:
+            self.storage.config.data["funpay"]["proxy"] = proxy
+            if use_for_telegram is not None:
+                self.storage.config.data["telegram"]["use_proxy"] = use_for_telegram
+            self.storage.config.save()
+        self.account.proxy = to_requests(proxy)
+        if self.tg:
+            self.tg.apply_proxy()
+        logger.info(f"Прокси: {mask(proxy)} (Telegram через прокси: {self.storage.telegram_uses_proxy}).")
 
     # ------------------------------------------------------------------ уведомления
     def notify(self, text: str, kind: str = "system", keyboard=None):
