@@ -564,3 +564,27 @@ class TestRealSocks5(unittest.TestCase):
         finally:
             socks.shutdown()
             web.shutdown()
+
+
+class TestRunnerParsing(unittest.TestCase):
+    def _runner(self):
+        from FunPayAPI import Runner
+        acc = FakeAccount()
+        acc.runner = None
+        acc.bot_character = "⁤"
+        acc.add_chats = lambda chats: None
+        acc.get_sells = lambda: (None, [])
+        return Runner(acc)
+
+    def test_chat_without_time_and_odd_objects(self):
+        runner = self._runner()
+        html = ('<a class="contact-item unread" data-id="555"><div class="media-user-name">Buyer</div>'
+                '<div class="contact-item-message">привет</div></a>')
+        events_ = runner.parse_updates({"objects": [
+            {"type": "chat_bookmarks", "tag": "t1", "data": {"html": html}},
+            {"type": "orders_counters", "tag": "t2", "data": False},
+            {"type": "chat_bookmarks", "tag": "t3", "data": False},
+        ]})
+        self.assertEqual(len(events_), 1)
+        self.assertEqual(events_[0].chat.name, "Buyer")
+        self.assertEqual(runner.parse_updates({}), [])
