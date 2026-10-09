@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from ..account import Account
 
 import json
+import time
 import logging
 from bs4 import BeautifulSoup
 
@@ -414,6 +415,7 @@ class Runner:
             :class:`FunPayAPI.updater.events.NewOrderEvent`,
             :class:`FunPayAPI.updater.events.OrderStatusChangedEvent`
         """
+        last_relogin = 0.0
         while True:
             try:
                 updates = self.get_updates()
@@ -428,6 +430,19 @@ class Runner:
                     logger.error(f"Произошла ошибка при получении событий: {reason[:300]} "
                                  "(ничего страшного, если это сообщение появляется нечасто).")
                     if isinstance(e, exceptions.RequestFailedError):
-                        logger.debug(f"Ответ FunPay: {e.response.content.decode(errors='ignore')[:2000]}")
+                        body = e.response.content.decode(errors="ignore")
+                        logger.debug(f"Ответ FunPay: {body[:2000]}")
+                        short = re.sub(r"<[^>]+>", " ", body)
+                        short = re.sub(r"\s+", " ", short).strip()[:200]
+                        if short:
+                            logger.error(f"Ответ FunPay: {short}")
+                        # 400 почти всегда означает устаревшую сессию / csrf-токен — переподключаемся.
+                        if e.status_code in (400, 419) and time.time() - last_relogin > 60:
+                            last_relogin = time.time()
+                            try:
+                                self.account.get(update_phpsessid=True)
+                                logger.info("Сессия FunPay обновлена (новый PHPSESSID и csrf-токен).")
+                            except Exception as relogin_error:
+                                logger.error(f"Не удалось обновить сессию FunPay: {relogin_error}")
                     logger.debug("TRACEBACK", exc_info=True)
             time.sleep(requests_delay)

@@ -83,6 +83,8 @@ class Account:
             types.SubCategoryTypes.CURRENCY: {}
         }
 
+        self.extra_cookies: dict[str, str] = {}
+        """Прочие куки, выставленные FunPay."""
         self.__bot_character = "⁤"
         """Если сообщение начинается с этого символа, значит оно отправлено ботом."""
 
@@ -112,19 +114,45 @@ class Account:
         :return: объект ответа.
         :rtype: :class:`requests.Response`
         """
-        headers["cookie"] = f"golden_key={self.golden_key}"
-        headers["cookie"] += f"; PHPSESSID={self.phpsessid}" if self.phpsessid and not exclude_phpsessid else ""
+        cookies = {"golden_key": self.golden_key}
+        if self.phpsessid and not exclude_phpsessid:
+            cookies["PHPSESSID"] = self.phpsessid
+        if not exclude_phpsessid:
+            for name, value in self.extra_cookies.items():
+                cookies.setdefault(name, value)
+        headers["cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
         if self.user_agent:
             headers["user-agent"] = self.user_agent
+        if request_method == "post":
+            headers.setdefault("origin", "https://funpay.com")
+            headers.setdefault("referer", "https://funpay.com/")
         link = api_method if api_method.startswith("https://funpay.com") else "https://funpay.com/" + api_method
         response = getattr(requests, request_method)(link, headers=headers, data=payload, timeout=self.requests_timeout,
                                                      proxies=self.proxy or {})
+        self._store_cookies(response, exclude_phpsessid)
 
         if response.status_code == 403:
             raise exceptions.UnauthorizedError(response)
         elif response.status_code != 200 and raise_not_200:
             raise exceptions.RequestFailedError(response)
         return response
+
+    def _store_cookies(self, response: requests.Response, new_session: bool = False):
+        """
+        Запоминает куки, которые выставил FunPay (в т.ч. обновлённый PHPSESSID), чтобы отправлять их дальше,
+        как это делает браузер.
+        """
+        if new_session:
+            self.extra_cookies = {}
+        for r in list(response.history) + [response]:
+            for name, value in r.cookies.get_dict().items():
+                if name == "golden_key":
+                    continue
+                if name == "PHPSESSID":
+                    if not new_session:
+                        self.phpsessid = value
+                    continue
+                self.extra_cookies[name] = value
 
     def get(self, update_phpsessid: bool = False) -> Account:
         """
@@ -157,8 +185,10 @@ class Account:
         active_purchases = parser.find("span", {"class": "badge badge-orders"})
         self.active_purchases = int(active_purchases.text) if active_purchases else 0
 
-        cookies = response.cookies.get_dict()
-        if update_phpsessid or not self.phpsessid:
+        cookies = {}
+        for r in list(response.history) + [response]:
+            cookies.update(r.cookies.get_dict())
+        if (update_phpsessid or not self.phpsessid) and cookies.get("PHPSESSID"):
             self.phpsessid = cookies["PHPSESSID"]
         if not self.is_initiated:
             self.__setup_categories(html_response)

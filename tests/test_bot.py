@@ -588,3 +588,31 @@ class TestRunnerParsing(unittest.TestCase):
         self.assertEqual(len(events_), 1)
         self.assertEqual(events_[0].chat.name, "Buyer")
         self.assertEqual(runner.parse_updates({}), [])
+
+
+class TestSessionCookies(unittest.TestCase):
+    def _response(self, cookies: dict, status=200):
+        import requests
+        r = requests.Response()
+        r.status_code = status
+        r._content = b"{}"
+        r.request = SimpleNamespace(url="https://funpay.com/runner/", headers={}, body="", method="POST")
+        for k, v in cookies.items():
+            r.cookies.set(k, v, domain="funpay.com")
+        return r
+
+    def test_cookies_are_kept_and_phpsessid_rotates(self):
+        from unittest.mock import patch
+        from FunPayAPI import Account
+        acc = Account("g" * 32, "UA")
+        acc.phpsessid = "old"
+        sent = []
+
+        def fake_post(url, headers=None, **kw):
+            sent.append(headers["cookie"])
+            return self._response({"PHPSESSID": "new", "cf_token": "abc"} if len(sent) == 1 else {})
+        with patch("FunPayAPI.account.requests.post", side_effect=fake_post):
+            acc.method("post", "runner/", {}, {})
+            acc.method("post", "runner/", {}, {})
+        self.assertEqual(sent[0], "golden_key=" + "g" * 32 + "; PHPSESSID=old")
+        self.assertEqual(sent[1], "golden_key=" + "g" * 32 + "; PHPSESSID=new; cf_token=abc")
