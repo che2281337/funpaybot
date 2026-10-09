@@ -132,7 +132,7 @@ class Runner:
             :class:`FunPayAPI.updater.events.OrderStatusChangedEvent`
         """
         events = []
-        for obj in updates["objects"]:
+        for obj in updates.get("objects") or []:
             if obj.get("type") == "chat_bookmarks":
                 events.extend(self.parse_chat_updates(obj))
             elif obj.get("type") == "orders_counters":
@@ -159,6 +159,9 @@ class Runner:
         """
         events, lcmc_events = [], []
         self.__last_msg_event_tag = obj.get("tag")
+        if not isinstance(obj.get("data"), dict) or "html" not in obj["data"]:
+            logger.debug(f"Неожиданный формат chat_bookmarks: {str(obj)[:500]}")
+            return events
         parser = BeautifulSoup(obj["data"]["html"], "html.parser")
         chats = parser.find_all("a", {"class": "contact-item"})
 
@@ -172,7 +175,8 @@ class Runner:
             last_msg_text = last_msg_text.text
             if last_msg_text.startswith(self.account.bot_character):
                 last_msg_text = last_msg_text.replace(self.account.bot_character, "", 1)
-            last_msg_time = chat.find("div", {"class": "contact-item-time"}).text
+            last_msg_time = chat.find("div", {"class": "contact-item-time"})
+            last_msg_time = last_msg_time.text if last_msg_time else ""
 
             # Если текст последнего сообщения совпадает с сохраненным
             if chat_id in self.last_messages and self.last_messages[chat_id][0] == last_msg_text:
@@ -186,7 +190,8 @@ class Runner:
                     continue
 
             unread = True if "unread" in chat.get("class") else False
-            chat_with = chat.find("div", {"class": "media-user-name"}).text
+            chat_with = chat.find("div", {"class": "media-user-name"})
+            chat_with = chat_with.text.strip() if chat_with else None
             chat_obj = types.ChatShortcut(chat_id, chat_with, last_msg_text, unread, str(chat))
             self.account.add_chats([chat_obj])
             self.last_messages[chat_id] = [last_msg_text, last_msg_time]
@@ -307,9 +312,10 @@ class Runner:
         """
         events = []
         self.__last_order_event_tag = obj.get("tag")
+        data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
         if not self.__first_request:
             events.append(OrdersListChangedEvent(self.__last_order_event_tag,
-                                                 obj["data"]["buyer"], obj["data"]["seller"]))
+                                                 data.get("buyer", 0), data.get("seller", 0)))
         if not self.make_order_requests:
             return events
 
@@ -418,7 +424,10 @@ class Runner:
                 if not ignore_exceptions:
                     raise e
                 else:
-                    logger.error("Произошла ошибка при получении событий. "
+                    reason = e.short_str() if hasattr(e, "short_str") else f"{type(e).__name__}: {e}"
+                    logger.error(f"Произошла ошибка при получении событий: {reason[:300]} "
                                  "(ничего страшного, если это сообщение появляется нечасто).")
+                    if isinstance(e, exceptions.RequestFailedError):
+                        logger.debug(f"Ответ FunPay: {e.response.content.decode(errors='ignore')[:2000]}")
                     logger.debug("TRACEBACK", exc_info=True)
             time.sleep(requests_delay)
