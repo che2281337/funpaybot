@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+import unittest.mock
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -748,3 +749,46 @@ class TestOfferEditFormats(unittest.TestCase):
             Account._offer_edit_html(self._resp('<div class="user-link-name">S</div><p class="lead">Лот не найден</p>'))
         with self.assertRaisesRegex(Exception, "не JSON"):
             Account._json(self._resp("<html>oops</html>"))
+
+
+class TestMessageParsing(unittest.TestCase):
+    def _parse(self, html, system=False):
+        from bs4 import BeautifulSoup
+        from FunPayAPI import Account
+        return Account._extract_message(BeautifulSoup(html, "html.parser"), system)
+
+    def test_formats(self):
+        self.assertEqual(self._parse('<div class="chat-msg-text">новый</div>'), ("новый", None))
+        self.assertEqual(self._parse('<div class="message-text">старый</div>'), ("старый", None))
+        self.assertEqual(self._parse('<a class="chat-img-link" href="https://x/i.png"></a>'), (None, "https://x/i.png"))
+        self.assertEqual(self._parse('<div role="alert"> Покупатель X оплатил заказ </div>', True)[0],
+                         "Покупатель X оплатил заказ")
+        # неизвестная разметка: берём текст без ника и даты
+        text, _ = self._parse('<div class="media-user-name">Buyer</div><div class="chat-msg-date">12:00</div>'
+                              '<div class="something-new">привет</div>')
+        self.assertEqual(text, "привет")
+
+
+class TestSendNoDuplicates(BotTestCase):
+    def test_no_retry_after_unknown_error(self):
+        calls = []
+
+        def boom(*a, **kw):
+            calls.append(1)
+            raise AttributeError("parse failed")
+        self.acc.send_message = boom
+        self.assertFalse(self.c.send_message(555, "hi"))
+        self.assertEqual(len(calls), 1)
+
+    def test_retry_on_connection_error(self):
+        import requests
+        calls = []
+
+        def flaky(*a, **kw):
+            calls.append(1)
+            if len(calls) == 1:
+                raise requests.exceptions.ConnectionError("down")
+        self.acc.send_message = flaky
+        with unittest.mock.patch("cardinal.core.time.sleep"):
+            self.assertTrue(self.c.send_message(555, "hi"))
+        self.assertEqual(len(calls), 2)

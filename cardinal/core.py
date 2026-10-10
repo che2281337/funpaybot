@@ -9,6 +9,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Optional
 
+import requests
+
 from FunPayAPI import Account, Runner, types
 from FunPayAPI.common import exceptions
 from FunPayAPI.common.utils import RegularExpressions
@@ -133,9 +135,17 @@ class Cardinal:
             try:
                 self.account.send_message(chat_id, text, chat_name)
                 return True
-            except Exception as e:
+            except (requests.exceptions.ConnectionError, exceptions.RequestFailedError) as e:
+                # запрос точно не дошёл до FunPay (или FunPay ответил ошибкой) — можно повторить
+                if isinstance(e, exceptions.RequestFailedError) and e.status_code < 500 and e.status_code != 429:
+                    logger.warning(f"Не удалось отправить сообщение в чат {chat_id}: {e.short_str()}")
+                    return False
                 logger.warning(f"Не удалось отправить сообщение в чат {chat_id} (попытка {attempt + 1}): {e}")
-                time.sleep(1)
+                time.sleep(2)
+            except Exception as e:
+                # таймаут ответа и прочее: сообщение могло уйти — не повторяем, чтобы не было дублей
+                logger.warning(f"Ошибка при отправке сообщения в чат {chat_id}: {type(e).__name__}: {e}")
+                return False
         return False
 
     def send_image(self, chat_id: int, image: bytes, chat_name: Optional[str] = None) -> None:
