@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 import telebot
 from telebot import types as tg
 
-from cardinal.proxy import to_requests
+from cardinal.proxy import mask, system_proxies, to_requests
 from cardinal.utils import split_text
 
 if TYPE_CHECKING:
@@ -349,11 +349,26 @@ class BaseBot:
             self.reply_map.popitem(last=False)
 
     def start(self):
+        proxy = self.storage.get_proxy("telegram")
+        system = system_proxies()
+        if proxy:
+            route = f"через прокси из настроек бота: {mask(proxy)}"
+        elif system:
+            route = f"через системный прокси / VPN: {mask(next(iter(system.values())))}"
+        else:
+            route = "напрямую"
+        logger.info(f"Подключение к Telegram {route}")
         try:
             me = self.bot.get_me()
             logger.info(f"Telegram-бот @{me.username} запущен.")
         except Exception as e:
-            logger.error(f"Не удалось подключиться к Telegram: {e}")
+            logger.error(f"Не удалось подключиться к Telegram ({route}): {type(e).__name__}. "
+                         + ("Прокси не работает или не пропускает Telegram — замените его в storage/config.json "
+                            "(раздел telegram → proxy). MTProto-прокси (tg://proxy?...) для ботов не подходят, "
+                            "нужен SOCKS5 или HTTP." if proxy or system else
+                            "Если Telegram заблокирован, укажите SOCKS5/HTTP-прокси в storage/config.json "
+                            "(раздел telegram → proxy) или включите VPN."))
+            logger.debug("TRACEBACK", exc_info=True)
         try:
             self.bot.set_my_commands([
                 tg.BotCommand("menu", "Главное меню"),

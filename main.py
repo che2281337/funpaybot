@@ -18,6 +18,26 @@ from cardinal.proxy import parse_proxy  # noqa: E402
 from cardinal.storage import Storage, hash_password  # noqa: E402
 
 
+class SecretsFilter(logging.Filter):
+    """Скрывает токен Telegram-бота и golden_key в логах (они попадают туда, например, в URL ошибок)."""
+    PATTERNS = (
+        (re.compile(r"\d{6,}:[A-Za-z0-9_-]{30,}"), "<TOKEN>"),
+        (re.compile(r"golden_key=[a-z0-9]{32}"), "golden_key=<HIDDEN>"),
+        (re.compile(r"PHPSESSID=[A-Za-z0-9]+"), "PHPSESSID=<HIDDEN>"),
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        for pattern, repl in self.PATTERNS:
+            message = pattern.sub(repl, message)
+            if record.exc_text:
+                record.exc_text = pattern.sub(repl, record.exc_text)
+        record.msg, record.args = message, None
+        return True
+
+
 def setup_logging():
     os.makedirs("logs", exist_ok=True)
     fmt = logging.Formatter("[%(asctime)s] %(levelname)-7s %(name)s: %(message)s", "%d.%m %H:%M:%S")
@@ -29,8 +49,9 @@ def setup_logging():
     console.setLevel(logging.INFO)
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
-    root.addHandler(file_handler)
-    root.addHandler(console)
+    for handler in (file_handler, console):
+        handler.addFilter(SecretsFilter())
+        root.addHandler(handler)
     for noisy in ("urllib3", "TeleBot", "requests"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
