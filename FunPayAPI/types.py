@@ -519,9 +519,10 @@ class LotFields:
         """Кол-во товара."""
         self.price: float = float(i) if (i := self.__fields.get("price")) else None
         """Цена за 1шт."""
-        self.active: bool = "active" in self.__fields
+        self.active: bool = self._checked("active")
         """Активен ли лот."""
-        self.deactivate_after_sale: bool = "deactivate_after_sale[]" in self.__fields
+        self.deactivate_after_sale: bool = (self._checked("deactivate_after_sale")
+                                            or self._checked("deactivate_after_sale[]"))
         """Деактивировать ли лот после продажи."""
 
     @property
@@ -553,6 +554,16 @@ class LotFields:
         """
         self.__fields = fields
 
+    def _checked(self, name: str) -> bool:
+        return str(self.__fields.get(name) or "").lower() not in ("", "0", "off", "false")
+
+    def _set_checkbox(self, name: str, value: bool):
+        if value:
+            if not self._checked(name):
+                self.__fields[name] = "on"
+        else:
+            self.__fields.pop(name, None)
+
     def renew_fields(self) -> LotFields:
         """
         Обновляет :py:obj:`~__fields` (возвращается в методе :meth:`FunPayAPI.types.LotFields.get_fields`),
@@ -567,8 +578,11 @@ class LotFields:
         self.__fields["fields[desc][ru]"] = self.description_ru
         self.__fields["fields[desc][en]"] = self.description_en
         self.__fields["price"] = str(self.price) if self.price is not None else ""
-        self.__fields["deactivate_after_sale"] = "on" if self.deactivate_after_sale else ""
-        self.__fields["active"] = "on" if self.active else ""
+        # Невыбранный чекбокс браузер просто не отправляет — делаем так же (пустое значение FunPay может
+        # принять за «включено»).
+        das_key = "deactivate_after_sale[]" if "deactivate_after_sale[]" in self.__fields else "deactivate_after_sale"
+        self._set_checkbox(das_key, self.deactivate_after_sale)
+        self._set_checkbox("active", self.active)
         self.__fields["amount"] = self.amount if self.amount is not None else ""
         return self
 

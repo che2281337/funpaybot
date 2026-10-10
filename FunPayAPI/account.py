@@ -496,16 +496,14 @@ class Account:
 
         mes = json_response["objects"][0]["data"]["messages"][-1]
         parser = BeautifulSoup(mes["html"], "html.parser")
+        # Сообщение уже доставлено — ошибки разбора ответа не должны приводить к повторной отправке.
         try:
-            if image_link := parser.find("a", {"class": "chat-img-link"}):
-                image_link = image_link.get("href")
-                message_text = None
-            else:
-                message_text = parser.find("div", {"class": "message-text"}).text.replace(self.__bot_character, "", 1)
-        except Exception as e:
-            logger.debug("SEND_MESSAGE RESPONSE")
-            logger.debug(response.content.decode())
-            raise e
+            message_text, image_link = self._extract_message(parser, False)
+            if message_text:
+                message_text = message_text.replace(self.__bot_character, "", 1)
+        except Exception:
+            logger.debug(f"Не удалось разобрать отправленное сообщение: {mes.get('html', '')[:1000]}")
+            message_text, image_link = (None if image_id is not None else text), None
 
         message_obj = types.Message(int(mes["id"]), message_text, chat_id, chat_name, self.username, self.id,
                                     mes["html"], image_link)
@@ -1233,6 +1231,32 @@ class Account:
         self.add_chats(self.request_chats())
         return self.get_chat_by_id(chat_id)
 
+    MESSAGE_TEXT_CLASSES = ("chat-msg-text", "message-text", "chat-message-text")
+    MESSAGE_META_CLASSES = ("media-user-name", "chat-msg-author", "chat-msg-date", "chat-message-date", "media-left",
+                            "chat-msg-author-label", "user-badge")
+
+    @classmethod
+    def _extract_message(cls, parser: BeautifulSoup, system: bool) -> tuple[Optional[str], Optional[str]]:
+        """
+        Достаёт из HTML сообщения (текст, ссылка на изображение). FunPay периодически переименовывает классы,
+        поэтому пробуем несколько вариантов, а в крайнем случае берём весь текст без шапки (ник, дата).
+        """
+        image = parser.find("a", {"class": re.compile(r"chat-img-link|chat-msg-img|img-link")})
+        if image and image.get("href"):
+            return None, image["href"]
+        if system:
+            alert = parser.find("div", {"role": "alert"}) or parser.find("div", {"class": re.compile(r"\balert\b")})
+            if alert:
+                return alert.get_text().strip(), None
+        for cls_name in cls.MESSAGE_TEXT_CLASSES:
+            if div := parser.find("div", {"class": cls_name}):
+                return div.get_text(), None
+        for cls_name in cls.MESSAGE_META_CLASSES:
+            for element in parser.find_all(class_=cls_name):
+                element.decompose()
+        logger.debug(f"Неизвестная разметка сообщения: {str(parser)[:500]}")
+        return parser.get_text(" ", strip=True), None
+
     @staticmethod
     def _offer_edit_html(response: requests.Response) -> str:
         """
@@ -1272,7 +1296,7 @@ class Account:
         Парсит HTML формы редактирования / создания лота и возвращает словарь полей.
         """
         bs = BeautifulSoup(html, "html.parser")
-        result = {"active": "", "deactivate_after_sale": ""}
+        result = {}
         for field in bs.find_all("input"):
             name = field.get("name")
             if not name or name in ["active", "deactivate_after_sale", "deactivate_after_sale[]"]:
@@ -1290,7 +1314,7 @@ class Account:
             result[field["name"]] = option.get("value", "") if option else ""
         for field in bs.find_all("input", {"type": "checkbox"}, checked=True):
             if field.get("name"):
-                result[field["name"]] = "on"
+                result[field["name"]] = field.get("value") or "on"
         return result
 
     @staticmethod
@@ -1436,8 +1460,11 @@ class Account:
             "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
             "x-requested-with": "XMLHttpRequest",
         }
-        fields = lot_fields.renew_fields().fields
+        fields = dict(lot_fields.renew_fields().fields)
         fields["location"] = "trade"
+        for name in ("active", "deactivate_after_sale", "deactivate_after_sale[]"):
+            if name in fields and str(fields[name] or "").lower() in ("", "0", "off", "false"):
+                del fields[name]
 
         response = self.method("post", "lots/offerSave", headers, fields, raise_not_200=True)
         json_response = self._json(response)
@@ -1590,18 +1617,10 @@ class Account:
                         interlocutor_username = author
                         ids[interlocutor_id] = interlocutor_username
 
-            if self.chat_id_private and (image_link := parser.find("a", {"class": "chat-img-link"})):
-                image_link = image_link.get("href")
-                message_text = None
-            else:
-                image_link = None
-                if author_id == 0:
-                    message_text = parser.find("div", {"class": "alert alert-with-icon alert-info"}).text.strip()
-                else:
-                    message_text = parser.find("div", {"class": "message-text"}).text
+            message_text, image_link = self._extract_message(parser, author_id == 0)
 
             by_bot = False
-            if not image_link and message_text.startswith(self.__bot_character):
+            if not image_link and message_text and message_text.startswith(self.__bot_character):
                 message_text = message_text.replace(self.__bot_character, "", 1)
                 by_bot = True
 
