@@ -608,10 +608,11 @@ class TestSessionCookies(unittest.TestCase):
         acc.phpsessid = "old"
         sent = []
 
-        def fake_post(url, headers=None, **kw):
+        def fake_request(session, method, url, headers=None, **kw):
+            self.assertFalse(session.trust_env)
             sent.append(headers["cookie"])
             return self._response({"PHPSESSID": "new", "cf_token": "abc"} if len(sent) == 1 else {})
-        with patch("FunPayAPI.account.requests.post", side_effect=fake_post):
+        with patch("requests.Session.request", autospec=True, side_effect=fake_request):
             acc.method("post", "runner/", {}, {})
             acc.method("post", "runner/", {}, {})
         base = "golden_key=" + "g" * 32 + "; cookie_prefs=1"
@@ -656,3 +657,33 @@ class TestRunnerVariants(unittest.TestCase):
         calls.clear()
         runner.get_updates()
         self.assertEqual(calls, [False])
+
+
+class TestSystemProxyIgnored(unittest.TestCase):
+    def test_env_proxy_not_used_for_funpay(self):
+        import http.server
+        import threading
+        from unittest.mock import patch
+        from FunPayAPI import Account
+
+        class Ok(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, *a):
+                pass
+        web = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+        threading.Thread(target=web.serve_forever, daemon=True).start()
+        bad = "socks5://127.0.0.1:9"  # системный «VPN»-прокси, который не работает
+        env = {"HTTP_PROXY": bad, "HTTPS_PROXY": bad, "ALL_PROXY": bad, "http_proxy": bad, "all_proxy": bad,
+               "NO_PROXY": "", "no_proxy": ""}
+        try:
+            with patch.dict(os.environ, env):
+                acc = Account("g" * 32)
+                r = acc._session().get(f"http://127.0.0.1:{web.server_address[1]}/", proxies={}, timeout=5)
+                self.assertEqual(r.text, "ok")
+        finally:
+            web.shutdown()

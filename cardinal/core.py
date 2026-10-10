@@ -16,7 +16,7 @@ from FunPayAPI.common.enums import MessageTypes, OrderStatuses, SubCategoryTypes
 from FunPayAPI.updater import events
 
 from .lots import LotsManager
-from .proxy import mask, to_requests
+from .proxy import mask, system_proxies, to_requests
 from .raiser import Raiser
 from .storage import Storage
 from .utils import esc, format_text, normalize_command
@@ -70,6 +70,10 @@ class Cardinal:
                 time.sleep(wait)
 
     def run(self):
+        if (found := system_proxies()) and not self.storage.proxy:
+            logger.warning(f"В системе найден прокси (обычно его включает VPN): {mask(next(iter(found.values())))}. "
+                           f"Для FunPay он НЕ используется — бот подключается напрямую. "
+                           f"Если нужен прокси для FunPay, задайте его в настройках бота.")
         if self.tg:
             self.tg.start()
         self.init_account()
