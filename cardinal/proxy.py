@@ -95,13 +95,14 @@ def proxy_type(proxy: Optional[str]) -> str:
     return proxy.split("://", 1)[0].upper()
 
 
-def check_proxy(proxy: str, timeout: float = 12) -> dict:
+def check_proxy(proxy: str, timeout: float = 12, use_system: bool = False) -> dict:
     """
     Проверяет прокси: внешний IP, доступность FunPay и Telegram.
     Возвращает {"ok": bool, "ip": str|None, "ping": float|None, "funpay": bool, "telegram": bool, "error": str|None}.
     """
     session = requests.Session()
-    session.trust_env = False  # как и сам бот: системный прокси не используется
+    # без прокси: для FunPay бот ходит напрямую, а для Telegram — через системные настройки (VPN)
+    session.trust_env = use_system and not proxy
     proxies = to_requests(proxy)
     result = {"ok": False, "ip": None, "ping": None, "funpay": False, "telegram": False, "error": None}
     try:

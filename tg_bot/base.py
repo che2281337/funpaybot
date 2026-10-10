@@ -110,8 +110,11 @@ class BaseBot:
         self._register_base()
 
     def apply_proxy(self):
-        """Включает / выключает прокси для запросов к Telegram (действует сразу)."""
-        telebot.apihelper.proxy = to_requests(self.storage.proxy) if self.storage.telegram_uses_proxy else None
+        """
+        Прокси для запросов к Telegram (действует сразу). Если он не задан, используются системные настройки
+        (например, включённый VPN).
+        """
+        telebot.apihelper.proxy = to_requests(self.storage.get_proxy("telegram"))
 
     # ------------------------------------------------------------------ регистрация
     def on_callback(self, name: str):
