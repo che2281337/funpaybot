@@ -713,3 +713,38 @@ class TestSystemProxyIgnored(unittest.TestCase):
                 self.assertEqual(r.text, "ok")
         finally:
             web.shutdown()
+
+
+class TestOfferEditFormats(unittest.TestCase):
+    FORM = ('<form class="form-offer-editor"><input type="hidden" name="offer_id" value="777">'
+            '<input name="price" value="99"><input type="checkbox" name="active" checked></form>')
+
+    def _resp(self, body: str):
+        import requests
+        r = requests.Response()
+        r.status_code = 200
+        r._content = body.encode()
+        r.request = SimpleNamespace(url="", headers={}, body="", method="GET")
+        return r
+
+    def test_json_and_html_page(self):
+        from FunPayAPI import Account
+        import json as _json
+        old = self._resp(_json.dumps({"html": self.FORM}))
+        page = self._resp('<html><div class="user-link-name">Seller</div><form><input name="query"></form>'
+                          + self.FORM + "</html>")
+        for resp in (old, page):
+            fields = Account._parse_lot_form(Account._offer_edit_html(resp))
+            self.assertEqual(fields["price"], "99")
+            self.assertEqual(fields["active"], "on")
+            self.assertNotIn("query", fields)  # поля шапки сайта не попадают в лот
+
+    def test_errors(self):
+        from FunPayAPI import Account
+        from FunPayAPI.common.exceptions import UnauthorizedError
+        with self.assertRaises(UnauthorizedError):
+            Account._offer_edit_html(self._resp("<html>login</html>"))
+        with self.assertRaisesRegex(Exception, "Лот не найден"):
+            Account._offer_edit_html(self._resp('<div class="user-link-name">S</div><p class="lead">Лот не найден</p>'))
+        with self.assertRaisesRegex(Exception, "не JSON"):
+            Account._json(self._resp("<html>oops</html>"))

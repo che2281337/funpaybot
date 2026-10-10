@@ -1234,6 +1234,39 @@ class Account:
         return self.get_chat_by_id(chat_id)
 
     @staticmethod
+    def _offer_edit_html(response: requests.Response) -> str:
+        """
+        HTML формы лота. Раньше FunPay отдавал JSON {"html": ...}, сейчас может отдавать обычную HTML-страницу —
+        поддерживаем оба варианта и вырезаем из страницы только форму лота.
+        """
+        try:
+            data = response.json()
+            if isinstance(data, dict) and data.get("html"):
+                return data["html"]
+        except ValueError:
+            pass
+        html = response.content.decode(errors="ignore")
+        bs = BeautifulSoup(html, "html.parser")
+        if bs.find("div", {"class": "user-link-name"}) is None and "offer_id" not in html:
+            raise exceptions.UnauthorizedError(response)
+        offer_input = bs.find("input", {"name": "offer_id"})
+        form = offer_input.find_parent("form") if offer_input else None
+        if form is None:
+            lead = bs.find("p", {"class": "lead"})
+            raise Exception(f"Форма лота не найдена на странице FunPay"
+                            f"{': ' + lead.text.strip() if lead else ''}")
+        return str(form)
+
+    @staticmethod
+    def _json(response: requests.Response) -> dict:
+        """response.json(), но с понятной ошибкой, если FunPay вернул не JSON."""
+        try:
+            return response.json()
+        except ValueError:
+            text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", response.content.decode(errors="ignore"))).strip()
+            raise Exception(f"FunPay вернул не JSON (статус {response.status_code}): {text[:200]}")
+
+    @staticmethod
     def _parse_lot_form(html: str) -> dict:
         """
         Парсит HTML формы редактирования / создания лота и возвращает словарь полей.
@@ -1297,9 +1330,7 @@ class Account:
             "x-requested-with": "XMLHttpRequest",
         }
         response = self.method("get", f"lots/offerEdit?offer={lot_id}", headers, {}, raise_not_200=True)
-
-        json_response = response.json()
-        return types.LotFields(lot_id, self._parse_lot_form(json_response["html"]))
+        return types.LotFields(lot_id, self._parse_lot_form(self._offer_edit_html(response)))
 
     def get_new_lot_form(self, node_id: int) -> tuple[types.LotFields, dict[str, dict]]:
         """
@@ -1317,7 +1348,7 @@ class Account:
             "x-requested-with": "XMLHttpRequest",
         }
         response = self.method("get", f"lots/offerEdit?node={node_id}", headers, {}, raise_not_200=True)
-        html = response.json()["html"]
+        html = self._offer_edit_html(response)
         fields = self._parse_lot_form(html)
         fields["offer_id"] = "0"
         fields["node_id"] = str(node_id)
@@ -1366,7 +1397,7 @@ class Account:
             "node_ids[]": node_ids
         }
         response = self.method("post", "lots/raise", headers, payload, raise_not_200=True)
-        json_response = response.json()
+        json_response = self._json(response)
         logger.debug(f"Ответ FunPay (поднятие лотов {game_id}): {json_response}.")
         category = self.get_category(game_id) or types.Category(game_id, str(game_id))
         if not json_response.get("error") and not json_response.get("modal"):
@@ -1409,9 +1440,14 @@ class Account:
         fields["location"] = "trade"
 
         response = self.method("post", "lots/offerSave", headers, fields, raise_not_200=True)
-        json_response = response.json()
+        json_response = self._json(response)
+        if errors := json_response.get("errors"):
+            # новые версии FunPay: {"errors": {"поле": "текст ошибки", ...}}
+            text = "; ".join(f"{k}: {v}" for k, v in errors.items()) if isinstance(errors, dict) else str(errors)
+            raise exceptions.LotSavingError(response, text, lot_fields.lot_id)
         if json_response.get("error"):
-            raise exceptions.LotSavingError(response, json_response.get("error"), lot_fields.lot_id)
+            error = json_response.get("msg") or json_response.get("error")
+            raise exceptions.LotSavingError(response, str(error), lot_fields.lot_id)
 
     def get_category(self, category_id: int) -> types.Category | None:
         """
