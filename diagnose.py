@@ -16,7 +16,7 @@ import requests  # noqa: E402
 
 from FunPayAPI import Account  # noqa: E402
 from FunPayAPI.common import utils  # noqa: E402
-from cardinal.proxy import mask, to_requests  # noqa: E402
+from cardinal.proxy import mask, system_proxies, to_requests  # noqa: E402
 
 
 def hide(text: str, secrets: list[str]) -> str:
@@ -36,7 +36,9 @@ def main():
         cfg = json.load(f)["funpay"]
     print(f"Python {sys.version.split()[0]}, requests {requests.__version__}")
     print(f"User-Agent: {cfg.get('user_agent')}")
-    print(f"Прокси: {mask(cfg.get('proxy'))}")
+    print(f"Прокси в настройках бота: {mask(cfg.get('proxy'))}")
+    print(f"Системный прокси (VPN, бот его НЕ использует): "
+          f"{ {k: mask(v) for k, v in system_proxies().items()} or 'нет'}")
     print(f"golden_key: длина {len(cfg['golden_key'])}")
 
     acc = Account(cfg["golden_key"], cfg.get("user_agent") or None, requests_timeout=20,

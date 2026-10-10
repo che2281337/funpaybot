@@ -69,6 +69,16 @@ def to_requests(proxy: Optional[str]) -> Optional[dict]:
     return {"http": proxy, "https": proxy}
 
 
+def system_proxies() -> dict:
+    """Прокси, заданные в системе (настройки Windows / переменные окружения), — обычно их ставят VPN-программы."""
+    import urllib.request
+    try:
+        found = urllib.request.getproxies()
+    except Exception:
+        return {}
+    return {k: v for k, v in found.items() if k != "no" and v}
+
+
 def mask(proxy: Optional[str]) -> str:
     """Скрывает пароль для показа в Telegram / логах."""
     if not proxy:
@@ -90,11 +100,13 @@ def check_proxy(proxy: str, timeout: float = 12) -> dict:
     Проверяет прокси: внешний IP, доступность FunPay и Telegram.
     Возвращает {"ok": bool, "ip": str|None, "ping": float|None, "funpay": bool, "telegram": bool, "error": str|None}.
     """
+    session = requests.Session()
+    session.trust_env = False  # как и сам бот: системный прокси не используется
     proxies = to_requests(proxy)
     result = {"ok": False, "ip": None, "ping": None, "funpay": False, "telegram": False, "error": None}
     try:
         start = time.time()
-        r = requests.get("https://api.ipify.org?format=json", proxies=proxies, timeout=timeout)
+        r = session.get("https://api.ipify.org?format=json", proxies=proxies, timeout=timeout)
         result["ping"] = round((time.time() - start) * 1000)
         result["ip"] = r.json().get("ip")
         result["ok"] = True
@@ -108,7 +120,7 @@ def check_proxy(proxy: str, timeout: float = 12) -> dict:
         result["error"] = _short_error(e)
     for key, url in (("funpay", "https://funpay.com/"), ("telegram", "https://api.telegram.org/")):
         try:
-            requests.get(url, proxies=proxies, timeout=timeout)
+            session.get(url, proxies=proxies, timeout=timeout)
             result[key] = True
             result["ok"] = True
         except Exception as e:

@@ -10,6 +10,7 @@ import requests
 import logging
 import random
 import string
+import threading
 import json
 import time
 import re
@@ -83,6 +84,7 @@ class Account:
             types.SubCategoryTypes.CURRENCY: {}
         }
 
+        self._local = threading.local()
         self.extra_cookies: dict[str, str] = {}
         """Прочие куки, выставленные FunPay."""
         self.__bot_character = "⁤"
@@ -128,9 +130,9 @@ class Account:
             headers.setdefault("referer", "https://funpay.com/")
         link = api_method if api_method.startswith("https://funpay.com") else "https://funpay.com/" + api_method
         # POST не должен молча превращаться в GET при редиректе (это даёт 400 на runner/)
-        response = getattr(requests, request_method)(link, headers=headers, data=payload, timeout=self.requests_timeout,
-                                                     proxies=self.proxy or {},
-                                                     allow_redirects=request_method != "post")
+        response = self._session().request(request_method.upper(), link, headers=headers, data=payload,
+                                           timeout=self.requests_timeout, proxies=self.proxy or {},
+                                           allow_redirects=request_method != "post")
         if request_method == "post" and response.is_redirect:
             logger.warning(f"FunPay перенаправил POST {api_method} на {response.headers.get('Location')}")
         self._store_cookies(response, exclude_phpsessid)
@@ -140,6 +142,18 @@ class Account:
         elif response.status_code != 200 and raise_not_200:
             raise exceptions.RequestFailedError(response)
         return response
+
+    def _session(self) -> requests.Session:
+        """
+        Сессия requests для текущего потока. trust_env=False: системный прокси Windows / переменные окружения
+        (например, от VPN-программ) НЕ используются — только прокси из настроек бота.
+        """
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+            self._local.session = session
+        return session
 
     def _store_cookies(self, response: requests.Response, new_session: bool = False):
         """
