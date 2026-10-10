@@ -792,3 +792,36 @@ class TestSendNoDuplicates(BotTestCase):
         with unittest.mock.patch("cardinal.core.time.sleep"):
             self.assertTrue(self.c.send_message(555, "hi"))
         self.assertEqual(len(calls), 2)
+
+
+class TestLotActiveFlag(unittest.TestCase):
+    def form(self, active: bool) -> str:
+        return ('<form><input type="hidden" name="offer_id" value="1"><input name="price" value="10">'
+                f'<input type="checkbox" name="active" {"checked" if active else ""}>'
+                '<input type="checkbox" name="deactivate_after_sale[]" value="1"></form>')
+
+    def test_inactive_lot_detected_and_toggle_roundtrip(self):
+        from unittest.mock import patch
+        from FunPayAPI import Account, types as fp_types
+        for initially_active in (False, True):
+            fields = fp_types.LotFields(1, Account._parse_lot_form(self.form(initially_active)))
+            self.assertEqual(fields.active, initially_active)
+            self.assertFalse(fields.deactivate_after_sale)
+            # переключаем и смотрим, что реально уйдёт в FunPay
+            fields.active = not initially_active
+            acc = Account("g" * 32)
+            acc._Account__initiated = True
+            acc.csrf_token = "t"
+            sent = {}
+
+            def fake_method(method, api, headers, payload, **kw):
+                sent.update(payload)
+                return SimpleNamespace(json=lambda: {})
+            with patch.object(acc, "method", side_effect=fake_method):
+                acc.save_lot(fields)
+            if initially_active:
+                self.assertNotIn("active", sent)  # выключение = поле не отправляется
+            else:
+                self.assertEqual(sent["active"], "on")
+            self.assertNotIn("deactivate_after_sale[]", sent)
+            self.assertNotIn("deactivate_after_sale", sent)

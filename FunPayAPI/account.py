@@ -1296,7 +1296,7 @@ class Account:
         Парсит HTML формы редактирования / создания лота и возвращает словарь полей.
         """
         bs = BeautifulSoup(html, "html.parser")
-        result = {"active": "", "deactivate_after_sale": ""}
+        result = {}
         for field in bs.find_all("input"):
             name = field.get("name")
             if not name or name in ["active", "deactivate_after_sale", "deactivate_after_sale[]"]:
@@ -1314,7 +1314,7 @@ class Account:
             result[field["name"]] = option.get("value", "") if option else ""
         for field in bs.find_all("input", {"type": "checkbox"}, checked=True):
             if field.get("name"):
-                result[field["name"]] = "on"
+                result[field["name"]] = field.get("value") or "on"
         return result
 
     @staticmethod
@@ -1460,8 +1460,11 @@ class Account:
             "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
             "x-requested-with": "XMLHttpRequest",
         }
-        fields = lot_fields.renew_fields().fields
+        fields = dict(lot_fields.renew_fields().fields)
         fields["location"] = "trade"
+        for name in ("active", "deactivate_after_sale", "deactivate_after_sale[]"):
+            if name in fields and str(fields[name] or "").lower() in ("", "0", "off", "false"):
+                del fields[name]
 
         response = self.method("post", "lots/offerSave", headers, fields, raise_not_200=True)
         json_response = self._json(response)
