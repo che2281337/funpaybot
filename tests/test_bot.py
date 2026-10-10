@@ -588,3 +588,71 @@ class TestRunnerParsing(unittest.TestCase):
         self.assertEqual(len(events_), 1)
         self.assertEqual(events_[0].chat.name, "Buyer")
         self.assertEqual(runner.parse_updates({}), [])
+
+
+class TestSessionCookies(unittest.TestCase):
+    def _response(self, cookies: dict, status=200):
+        import requests
+        r = requests.Response()
+        r.status_code = status
+        r._content = b"{}"
+        r.request = SimpleNamespace(url="https://funpay.com/runner/", headers={}, body="", method="POST")
+        for k, v in cookies.items():
+            r.cookies.set(k, v, domain="funpay.com")
+        return r
+
+    def test_cookies_are_kept_and_phpsessid_rotates(self):
+        from unittest.mock import patch
+        from FunPayAPI import Account
+        acc = Account("g" * 32, "UA")
+        acc.phpsessid = "old"
+        sent = []
+
+        def fake_post(url, headers=None, **kw):
+            sent.append(headers["cookie"])
+            return self._response({"PHPSESSID": "new", "cf_token": "abc"} if len(sent) == 1 else {})
+        with patch("FunPayAPI.account.requests.post", side_effect=fake_post):
+            acc.method("post", "runner/", {}, {})
+            acc.method("post", "runner/", {}, {})
+        base = "golden_key=" + "g" * 32 + "; cookie_prefs=1"
+        self.assertEqual(sent[0], base + "; PHPSESSID=old")
+        self.assertEqual(sent[1], base + "; PHPSESSID=new; cf_token=abc")
+
+
+class TestUserAgent(BotTestCase):
+    def test_set_user_agent(self):
+        self.acc.get = MagicMock()
+        self.acc.user_agent = None
+        ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/129.0 Safari/537.36"
+        self.press("ua")
+        self.type_text("hello")
+        self.assertNotEqual(self.storage.config.data["funpay"]["user_agent"], "hello")
+        self.type_text(ua)
+        self.assertEqual(self.storage.config.data["funpay"]["user_agent"], ua)
+        self.assertEqual(self.acc.user_agent, ua)
+        self.acc.get.assert_called_once_with(update_phpsessid=True)
+
+
+class TestRunnerVariants(unittest.TestCase):
+    def test_falls_back_to_working_payload(self):
+        from FunPayAPI import Runner
+        from FunPayAPI.common.exceptions import RequestFailedError
+        acc = FakeAccount()
+        acc.runner = None
+        acc.csrf_token = "t"
+        calls = []
+
+        def method(kind, url, headers, payload, raise_not_200=False):
+            calls.append(payload.get("request", "<нет>"))
+            if payload.get("request") is not False:
+                r = SimpleNamespace(status_code=400, request=SimpleNamespace(url=url, headers={}, body=""))
+                raise RequestFailedError(r)
+            return SimpleNamespace(json=lambda: {"objects": []})
+        acc.method = method
+        runner = Runner(acc)
+        self.assertEqual(runner.get_updates(), {"objects": []})
+        self.assertEqual(calls, ["false", False])
+        self.assertEqual(runner.payload_variant, 1)
+        calls.clear()
+        runner.get_updates()
+        self.assertEqual(calls, [False])
