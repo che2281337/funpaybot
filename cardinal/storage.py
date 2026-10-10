@@ -25,7 +25,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "token": "",
         "password_hash": "",
         "admins": [],
-        "use_proxy": False,
+        "proxy": "",
     },
     "settings": {
         "auto_raise": True,
@@ -143,7 +143,16 @@ class Storage:
         for file in (self.config, self.auto_response, self.review_replies, self.templates, self.auto_delivery):
             if not os.path.exists(file.path):
                 file.save()
+        self._migrate()
         self._apply_env()
+
+    def _migrate(self):
+        """Старые версии хранили один прокси в funpay.proxy и флаг telegram.use_proxy."""
+        cfg = self.config.data
+        if "use_proxy" in cfg["telegram"]:
+            if cfg["telegram"].pop("use_proxy") and cfg["funpay"].get("proxy") and not cfg["telegram"].get("proxy"):
+                cfg["telegram"]["proxy"] = cfg["funpay"]["proxy"]
+            self.config.save()
 
     def _apply_env(self):
         """Позволяет задать ключевые параметры через переменные окружения (удобно для Docker / хостинга)."""
@@ -154,14 +163,16 @@ class Storage:
             "FUNPAY_USER_AGENT": ("funpay", "user_agent"),
             "FUNPAY_PROXY": ("funpay", "proxy"),
             "TELEGRAM_TOKEN": ("telegram", "token"),
+            "TELEGRAM_PROXY": ("telegram", "proxy"),
         }
-        if os.environ.get("FUNPAY_PROXY"):
-            from .proxy import parse_proxy
-            try:
-                os.environ["FUNPAY_PROXY"] = parse_proxy(os.environ["FUNPAY_PROXY"])
-            except ValueError:
-                logger.error("FUNPAY_PROXY задан в неверном формате — игнорирую.")
-                os.environ.pop("FUNPAY_PROXY")
+        for env in ("FUNPAY_PROXY", "TELEGRAM_PROXY"):
+            if os.environ.get(env):
+                from .proxy import parse_proxy
+                try:
+                    os.environ[env] = parse_proxy(os.environ[env], "socks5")
+                except ValueError:
+                    logger.error(f"{env} задан в неверном формате — игнорирую.")
+                    os.environ.pop(env)
         for env, (section, key) in env_map.items():
             if (value := os.environ.get(env)) and cfg[section][key] != value:
                 cfg[section][key] = value
@@ -200,13 +211,9 @@ class Storage:
             self.config.save()
             return self.settings["notify"][key]
 
-    @property
-    def proxy(self) -> str:
-        return self.config.data["funpay"].get("proxy") or ""
-
-    @property
-    def telegram_uses_proxy(self) -> bool:
-        return bool(self.config.data["telegram"].get("use_proxy")) and bool(self.proxy)
+    def get_proxy(self, target: str) -> str:
+        """target: "telegram" или "funpay". Пустая строка — без прокси."""
+        return self.config.data[target].get("proxy") or ""
 
     @property
     def admins(self) -> list[int]:

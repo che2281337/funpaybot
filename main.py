@@ -47,7 +47,7 @@ def ask(prompt: str, validator=None, secret: bool = False, default: str = "") ->
 
 def _valid_proxy(value: str) -> bool:
     try:
-        parse_proxy(value)
+        parse_proxy(value, "socks5")
         return True
     except ValueError:
         return False
@@ -78,9 +78,11 @@ def first_setup(storage: Storage):
         print("\n3) Пароль для входа в панель Telegram (минимум 6 символов). Его нужно будет отправить боту.")
         password = ask("   Пароль: ", lambda v: len(v) >= 6, secret=True)
         cfg["telegram"]["password_hash"] = hash_password(password)
-    proxy = ask("\n4) Прокси (socks5://user:pass@ip:port или http://ip:port) [Enter — без прокси]: ",
-                lambda v: _valid_proxy(v), default="-")
-    cfg["funpay"]["proxy"] = "" if proxy == "-" else parse_proxy(proxy)
+    if not cfg["telegram"].get("proxy"):
+        print("\n4) Прокси для Telegram — нужен, если Telegram заблокирован (например, в РФ без VPN).")
+        print("   Формат: socks5://user:pass@ip:port, ip:port:user:pass или http://ip:port. FunPay работает напрямую.")
+        proxy = ask("   Прокси для Telegram [Enter — без прокси]: ", lambda v: _valid_proxy(v), default="-")
+        cfg["telegram"]["proxy"] = "" if proxy == "-" else parse_proxy(proxy, "socks5")
     storage.config.save()
     print("\n✅ Настройки сохранены в storage/config.json. Запускаю бота...\n")
 

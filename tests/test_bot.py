@@ -442,39 +442,65 @@ class TestProxy(BotTestCase):
         res.update(kw)
         return res
 
-    def test_set_proxy_from_telegram(self):
+    def test_telegram_proxy(self):
         import telebot
         from tg_bot import panel
-        panel.check_proxy = lambda p: self._ok()
-        self.press("px_ty:socks5")
+        panel.check_proxy = lambda p, **kw: self._ok()
+        self.press("px_ty:tg:socks5")
         self.type_text("1.2.3.4:1080:user:pass")
-        self.assertEqual(self.storage.proxy, "socks5://user:pass@1.2.3.4:1080")
-        self.assertEqual(self.c.account.proxy["https"], "socks5://user:pass@1.2.3.4:1080")
-        # set_proxy применяет прокси к аккаунту
-        self.c.account = SimpleNamespace(proxy=None)
-        self.c.set_proxy("socks5://1.2.3.4:1080")
-        self.assertEqual(self.c.account.proxy, {"http": "socks5://1.2.3.4:1080", "https": "socks5://1.2.3.4:1080"})
-        # Telegram через прокси
-        self.assertIsNone(telebot.apihelper.proxy)
-        self.press("px_tg")
-        self.assertEqual(telebot.apihelper.proxy["https"], "socks5://1.2.3.4:1080")
-        self.press("px_offy")
-        self.assertEqual(self.storage.proxy, "")
+        self.assertEqual(self.storage.get_proxy("telegram"), "socks5://user:pass@1.2.3.4:1080")
+        self.assertEqual(self.storage.get_proxy("funpay"), "")
+        self.assertEqual(telebot.apihelper.proxy["https"], "socks5://user:pass@1.2.3.4:1080")
+        # FunPay при этом без прокси
+        self.assertFalse(getattr(self.c.account, "proxy", None))
+        self.press("px_offy:tg")
+        self.assertEqual(self.storage.get_proxy("telegram"), "")
         self.assertIsNone(telebot.apihelper.proxy)
 
-    def test_bad_proxy_not_saved_and_tg_protected(self):
+    def test_bad_telegram_proxy_never_saved(self):
         from tg_bot import panel
-        panel.check_proxy = lambda p: self._ok(funpay=False, telegram=False, ip=None, error="таймаут")
-        self.press("px_ty:http")
+        panel.check_proxy = lambda p, **kw: self._ok(telegram=False)
+        self.press("px_ty:tg:socks5")
+        self.type_text("1.2.3.4:1080")
+        self.assertEqual(self.storage.get_proxy("telegram"), "")
+        self.press("px_force")  # форс-сохранение для Telegram невозможно
+        self.assertEqual(self.storage.get_proxy("telegram"), "")
+
+    def test_telegram_proxy_not_removed_if_blocked(self):
+        from tg_bot import panel
+        self.c.set_proxy("telegram", "socks5://1.2.3.4:1080")
+        panel.check_proxy = lambda p, **kw: self._ok(telegram=False)
+        self.press("px_offy:tg")
+        self.assertEqual(self.storage.get_proxy("telegram"), "socks5://1.2.3.4:1080")
+
+    def test_funpay_proxy(self):
+        from tg_bot import panel
+        self.c.account = SimpleNamespace(proxy=None)
+        panel.check_proxy = lambda p, **kw: self._ok(funpay=False)
+        self.press("px_ty:fp:http")
         self.type_text("1.2.3.4:8080")
-        self.assertEqual(self.storage.proxy, "")
+        self.assertEqual(self.storage.get_proxy("funpay"), "")
         self.press("px_force")
-        self.assertEqual(self.storage.proxy, "http://1.2.3.4:8080")
-        self.press("px_tg")  # Telegram через прокси недоступен — не включаем
-        self.assertFalse(self.storage.telegram_uses_proxy)
+        self.assertEqual(self.storage.get_proxy("funpay"), "http://1.2.3.4:8080")
+        self.assertEqual(self.c.account.proxy["https"], "http://1.2.3.4:8080")
+        self.press("px_offy:fp")
+        self.assertEqual(self.c.account.proxy, None)
+
+    def test_migration_from_old_config(self):
+        import json
+        path = os.path.join(self.tmp, "old")
+        os.makedirs(path)
+        cfg = {"funpay": {"golden_key": "", "proxy": "socks5://9.9.9.9:1"}, "telegram": {"use_proxy": True}}
+        with open(os.path.join(path, "config.json"), "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        st = Storage(path)
+        self.assertEqual(st.get_proxy("telegram"), "socks5://9.9.9.9:1")
+        self.assertNotIn("use_proxy", st.config.data["telegram"])
 
     def test_menus(self):
-        for data in ("px", "px_set", "px_off"):
+        from tg_bot import panel
+        panel.check_proxy = lambda p, **kw: self._ok()
+        for data in ("px", "px_set:tg", "px_set:fp", "px_off:tg", "px_chk:tg", "px_chk:fp"):
             self.tg.bot.reset_mock()
             self.press(data)
             self.assertFalse([t for t in self.tg_texts() if t.startswith("❌ Ошибка")], data)

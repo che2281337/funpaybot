@@ -33,10 +33,12 @@ def short(body: str) -> str:
 
 def main():
     with open("storage/config.json", encoding="utf-8") as f:
-        cfg = json.load(f)["funpay"]
+        full_cfg = json.load(f)
+    cfg = full_cfg["funpay"]
     print(f"Python {sys.version.split()[0]}, requests {requests.__version__}")
     print(f"User-Agent: {cfg.get('user_agent')}")
-    print(f"Прокси в настройках бота: {mask(cfg.get('proxy'))}")
+    print(f"Прокси для FunPay: {mask(cfg.get('proxy'))}")
+    print(f"Прокси для Telegram: {mask(full_cfg.get('telegram', {}).get('proxy'))}")
     print(f"Системный прокси (VPN, бот его НЕ использует): "
           f"{ {k: mask(v) for k, v in system_proxies().items()} or 'нет'}")
     print(f"golden_key: длина {len(cfg['golden_key'])}")

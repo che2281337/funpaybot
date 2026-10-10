@@ -70,7 +70,7 @@ class Cardinal:
                 time.sleep(wait)
 
     def run(self):
-        if (found := system_proxies()) and not self.storage.proxy:
+        if (found := system_proxies()) and not self.storage.get_proxy("funpay"):
             logger.warning(f"В системе найден прокси (обычно его включает VPN): {mask(next(iter(found.values())))}. "
                            f"Для FunPay он НЕ используется — бот подключается напрямую. "
                            f"Если нужен прокси для FunPay, задайте его в настройках бота.")
@@ -106,17 +106,19 @@ class Cardinal:
                 logger.debug(f"online_loop: {e}")
 
     # ------------------------------------------------------------------ прокси
-    def set_proxy(self, proxy: str, use_for_telegram: Optional[bool] = None):
-        """Сохраняет и сразу применяет прокси (пустая строка — без прокси). Перезапуск не нужен."""
+    def set_proxy(self, target: str, proxy: str):
+        """
+        Сохраняет и сразу применяет прокси (пустая строка — без прокси). Перезапуск не нужен.
+        :param target: "telegram" — для связи с Telegram (обход блокировки), "funpay" — для запросов к FunPay.
+        """
         with self.storage.config.lock:
-            self.storage.config.data["funpay"]["proxy"] = proxy
-            if use_for_telegram is not None:
-                self.storage.config.data["telegram"]["use_proxy"] = use_for_telegram
+            self.storage.config.data[target]["proxy"] = proxy
             self.storage.config.save()
-        self.account.proxy = to_requests(proxy)
-        if self.tg:
+        if target == "funpay":
+            self.account.proxy = to_requests(proxy)
+        elif self.tg:
             self.tg.apply_proxy()
-        logger.info(f"Прокси: {mask(proxy)} (Telegram через прокси: {self.storage.telegram_uses_proxy}).")
+        logger.info(f"Прокси для {'Telegram' if target == 'telegram' else 'FunPay'}: {mask(proxy)}.")
 
     # ------------------------------------------------------------------ уведомления
     def notify(self, text: str, kind: str = "system", keyboard=None):
