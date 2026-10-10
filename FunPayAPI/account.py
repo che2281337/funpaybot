@@ -114,7 +114,7 @@ class Account:
         :return: объект ответа.
         :rtype: :class:`requests.Response`
         """
-        cookies = {"golden_key": self.golden_key}
+        cookies = {"golden_key": self.golden_key, "cookie_prefs": "1"}
         if self.phpsessid and not exclude_phpsessid:
             cookies["PHPSESSID"] = self.phpsessid
         if not exclude_phpsessid:
@@ -127,8 +127,12 @@ class Account:
             headers.setdefault("origin", "https://funpay.com")
             headers.setdefault("referer", "https://funpay.com/")
         link = api_method if api_method.startswith("https://funpay.com") else "https://funpay.com/" + api_method
+        # POST не должен молча превращаться в GET при редиректе (это даёт 400 на runner/)
         response = getattr(requests, request_method)(link, headers=headers, data=payload, timeout=self.requests_timeout,
-                                                     proxies=self.proxy or {})
+                                                     proxies=self.proxy or {},
+                                                     allow_redirects=request_method != "post")
+        if request_method == "post" and response.is_redirect:
+            logger.warning(f"FunPay перенаправил POST {api_method} на {response.headers.get('Location')}")
         self._store_cookies(response, exclude_phpsessid)
 
         if response.status_code == 403:

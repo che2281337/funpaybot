@@ -614,8 +614,9 @@ class TestSessionCookies(unittest.TestCase):
         with patch("FunPayAPI.account.requests.post", side_effect=fake_post):
             acc.method("post", "runner/", {}, {})
             acc.method("post", "runner/", {}, {})
-        self.assertEqual(sent[0], "golden_key=" + "g" * 32 + "; PHPSESSID=old")
-        self.assertEqual(sent[1], "golden_key=" + "g" * 32 + "; PHPSESSID=new; cf_token=abc")
+        base = "golden_key=" + "g" * 32 + "; cookie_prefs=1"
+        self.assertEqual(sent[0], base + "; PHPSESSID=old")
+        self.assertEqual(sent[1], base + "; PHPSESSID=new; cf_token=abc")
 
 
 class TestUserAgent(BotTestCase):
@@ -630,3 +631,28 @@ class TestUserAgent(BotTestCase):
         self.assertEqual(self.storage.config.data["funpay"]["user_agent"], ua)
         self.assertEqual(self.acc.user_agent, ua)
         self.acc.get.assert_called_once_with(update_phpsessid=True)
+
+
+class TestRunnerVariants(unittest.TestCase):
+    def test_falls_back_to_working_payload(self):
+        from FunPayAPI import Runner
+        from FunPayAPI.common.exceptions import RequestFailedError
+        acc = FakeAccount()
+        acc.runner = None
+        acc.csrf_token = "t"
+        calls = []
+
+        def method(kind, url, headers, payload, raise_not_200=False):
+            calls.append(payload.get("request", "<нет>"))
+            if payload.get("request") is not False:
+                r = SimpleNamespace(status_code=400, request=SimpleNamespace(url=url, headers={}, body=""))
+                raise RequestFailedError(r)
+            return SimpleNamespace(json=lambda: {"objects": []})
+        acc.method = method
+        runner = Runner(acc)
+        self.assertEqual(runner.get_updates(), {"objects": []})
+        self.assertEqual(calls, ["false", False])
+        self.assertEqual(runner.payload_variant, 1)
+        calls.clear()
+        runner.get_updates()
+        self.assertEqual(calls, [False])

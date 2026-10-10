@@ -55,6 +55,7 @@ class Runner:
         """Делать ли доп запросы для получения все новых / изменившихся заказов?"""
 
         self.__first_request = True
+        self.payload_variant = 0
         self.__last_msg_event_tag = utils.random_tag()
         self.__last_order_event_tag = utils.random_tag()
 
@@ -86,6 +87,41 @@ class Runner:
         :return: ответ FunPay.
         :rtype: :obj:`dict`
         """
+        headers = {
+            "accept": "*/*",
+            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "x-requested-with": "XMLHttpRequest"
+        }
+        # FunPay время от времени меняет требования к запросу. Если текущий вариант отвергается с 400,
+        # пробуем остальные и запоминаем рабочий.
+        order = [self.payload_variant] + [i for i in range(len(self.PAYLOAD_VARIANTS)) if i != self.payload_variant]
+        last_error = None
+        for variant in order:
+            payload = self._build_payload(variant)
+            try:
+                response = self.account.method("post", "runner/", dict(headers), payload, raise_not_200=True)
+            except exceptions.RequestFailedError as e:
+                if e.status_code != 400:
+                    raise
+                last_error = e
+                logger.debug(f"runner: вариант запроса «{self.PAYLOAD_VARIANTS[variant]}» отклонён (400).")
+                continue
+            if variant != self.payload_variant:
+                logger.info(f"runner: FunPay принял вариант запроса «{self.PAYLOAD_VARIANTS[variant]}», использую его.")
+                self.payload_variant = variant
+            json_response = response.json()
+            logger.debug(f"Получены данные о событиях: {json_response}")
+            return json_response
+        raise last_error
+
+    PAYLOAD_VARIANTS = ("request=false", "request=False (старый)", "теги 8 символов", "без поля request")
+
+    def _build_payload(self, variant: int) -> dict:
+        if variant == 2:
+            if len(self.__last_order_event_tag) != 8:
+                self.__last_order_event_tag = utils.random_tag()[:8]
+            if len(self.__last_msg_event_tag) != 8:
+                self.__last_msg_event_tag = utils.random_tag()[:8]
         orders = {
             "type": "orders_counters",
             "id": self.account.id,
@@ -100,19 +136,14 @@ class Runner:
         }
         payload = {
             "objects": json.dumps([orders, chats]),
-            "request": False,
+            "request": "false",
             "csrf_token": self.account.csrf_token
         }
-        headers = {
-            "accept": "*/*",
-            "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "x-requested-with": "XMLHttpRequest"
-        }
-
-        response = self.account.method("post", "runner/", headers, payload, raise_not_200=True)
-        json_response = response.json()
-        logger.debug(f"Получены данные о событиях: {json_response}")
-        return json_response
+        if variant == 1:
+            payload["request"] = False
+        elif variant == 3:
+            del payload["request"]
+        return payload
 
     def parse_updates(self, updates: dict) -> list[InitialChatEvent | ChatsListChangedEvent |
                                                    LastChatMessageChangedEvent | NewMessageEvent | InitialOrderEvent |
