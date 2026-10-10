@@ -139,13 +139,30 @@ class TGBot(LotsMixin, PanelMixin, BaseBot):
             [btn("🛠 Настройки", "set")],
         ))
 
+    @staticmethod
+    def _ping_mark(ms) -> str:
+        if ms is None:
+            return "—"
+        return f"{'🟢' if ms < 400 else '🟡' if ms < 1000 else '🔴'} {ms} мс"
+
     def cb_status(self, ctx: Ctx):
         a = self.c.account
         st = self.c.stats
+        started = time.time()
+        try:
+            self.bot.get_me()
+            tg_ms = round((time.time() - started) * 1000)
+        except Exception:
+            tg_ms = None
+        fp_ms = getattr(self.c.runner, "last_request_ms", None)
+        tg_proxy = self.storage.get_proxy("telegram")
         text = (f"📊 <b>Статус</b>\n\n"
                 f"👤 Аккаунт: <b>{esc(a.username)}</b> (ID {a.id})\n"
                 f"⏱ Аптайм: {human_time(time.time() - self.c.start_time)}\n"
                 f"🛒 Активных продаж: {a.active_sales}\n\n"
+                f"📶 Пинг Telegram: {self._ping_mark(tg_ms)}{' (через прокси)' if tg_proxy else ''}\n"
+                f"📶 Пинг FunPay: {self._ping_mark(fp_ms)}\n"
+                f"🔁 Проверка новых сообщений FunPay: каждые {self.storage.setting('runner_delay', 6)} сек\n\n"
                 f"За эту сессию:\n"
                 f"💬 Сообщений: {st['messages']}\n"
                 f"🛒 Заказов: {st['orders']}\n"

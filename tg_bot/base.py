@@ -67,12 +67,17 @@ class Ctx:
         self.call = call
 
     def answer(self, text: str = "", alert: bool = False):
+        """Убирает «часики» с кнопки. Делается в фоне, чтобы не ждать лишний запрос к Telegram."""
         if self.call:
-            try:
-                self.bot.answer_callback_query(self.call.id, text[:200], show_alert=alert)
-            except Exception:
-                pass
+            call_id = self.call.id
             self.call = None
+
+            def send():
+                try:
+                    self.bot.answer_callback_query(call_id, text[:200], show_alert=alert)
+                except Exception:
+                    pass
+            threading.Thread(target=send, daemon=True).start()
 
     def show(self, text: str, markup: Optional[tg.InlineKeyboardMarkup] = None, new: bool = False):
         """Редактирует текущее сообщение с меню (если это нажатие кнопки), иначе отправляет новое."""

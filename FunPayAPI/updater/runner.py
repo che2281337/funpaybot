@@ -56,6 +56,8 @@ class Runner:
 
         self.__first_request = True
         self.payload_variant = 0
+        self.last_request_ms: int | None = None
+        """Время последнего запроса событий к FunPay (мс)."""
         self.__last_msg_event_tag = utils.random_tag()
         self.__last_order_event_tag = utils.random_tag()
 
@@ -99,7 +101,9 @@ class Runner:
         for variant in order:
             payload = self._build_payload(variant)
             try:
+                started = time.time()
                 response = self.account.method("post", "runner/", dict(headers), payload, raise_not_200=True)
+                self.last_request_ms = round((time.time() - started) * 1000)
             except exceptions.RequestFailedError as e:
                 if e.status_code != 400:
                     raise
@@ -476,4 +480,4 @@ class Runner:
                             except Exception as relogin_error:
                                 logger.error(f"Не удалось обновить сессию FunPay: {relogin_error}")
                     logger.debug("TRACEBACK", exc_info=True)
-            time.sleep(requests_delay)
+            time.sleep(requests_delay() if callable(requests_delay) else requests_delay)

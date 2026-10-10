@@ -86,7 +86,9 @@ class Cardinal:
         self.listen()
 
     def listen(self):
-        delay = float(self.storage.setting("runner_delay", 6))
+        # интервал читается на каждом круге — его можно менять из Telegram без перезапуска
+        def delay() -> float:
+            return max(2.0, float(self.storage.setting("runner_delay", 6)))
         for event in self.runner.listen(requests_delay=delay):
             try:
                 self.process_event(event)

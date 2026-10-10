@@ -66,7 +66,7 @@ class PanelMixin:
             # уведомления / ЧС / настройки
             "nt": self.cb_nt, "nt_t": self.cb_nt_toggle,
             "bl": self.cb_bl, "bl_add": self.cb_bl_add, "bl_d": self.cb_bl_delete,
-            "set": self.cb_set, "set_t": self.cb_set_toggle, "adm": self.cb_admins, "adm_d": self.cb_admin_delete,
+            "set": self.cb_set, "set_t": self.cb_set_toggle, "rd": self.cb_runner_delay, "adm": self.cb_admins, "adm_d": self.cb_admin_delete,
             "logs": self.cb_logs, "pwd": self.cb_password, "gk": self.cb_golden_key,
             "ua": self.cb_user_agent,
             "rst": self.cb_restart, "rsty": self.cb_restart_yes,
@@ -585,11 +585,26 @@ class PanelMixin:
         rows += [[btn("👥 Администраторы", "adm"), btn("📄 Логи", "logs")],
                  [btn("🔑 Сменить пароль", "pwd"), btn("🍪 Сменить golden_key", "gk")],
                  btn("🧭 Сменить User-Agent", "ua"),
+                 btn(f"🔁 Проверка FunPay: каждые {self.storage.setting('runner_delay', 6)} сек", "rd"),
                  btn(f"🌐 Прокси (Telegram: {proxy_type(self.storage.get_proxy('telegram'))})", "px"),
                  [btn("🔄 Перезапуск", "rst"), btn(BACK, "menu")]]
         ctx.show("🛠 <b>Настройки</b>\n\n<b>Вечный онлайн</b> — бот постоянно держит аккаунт в сети.\n"
                  "<b>Автовосстановление</b> — если лот выключился после продажи, бот включит его снова.\n"
                  "<b>Выключать лот</b> — когда закончились товары автовыдачи.", kb(*rows))
+
+    def cb_runner_delay(self, ctx: Ctx, value: str | None = None):
+        if value:
+            self.storage.set_setting("runner_delay", int(value))
+            ctx.answer(f"✅ Каждые {value} сек")
+            self.cb_set(ctx)
+            return
+        current = self.storage.setting("runner_delay", 6)
+        options = (2, 3, 4, 6, 10)
+        ctx.show("🔁 <b>Как часто проверять новые сообщения и заказы на FunPay?</b>\n\n"
+                 "Чем чаще, тем быстрее приходят уведомления и срабатывают автоответы. "
+                 "Слишком частые запросы (2 сек) могут не понравиться FunPay. Оптимально — 3–4 сек.",
+                 kb([btn(("✅ " if v == current else "") + f"{v} сек", f"rd:{v}") for v in options],
+                    btn(BACK, "set")))
 
     def cb_set_toggle(self, ctx: Ctx, key: str):
         if key in SETTINGS_NAMES:

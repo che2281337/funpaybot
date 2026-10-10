@@ -295,7 +295,7 @@ class TestTelegram(BotTestCase):
     def test_all_menus_render(self):
         for data in ["menu", "st", "bal", "chats", "chat:555", "orders", "ord:ABCD1234", "lots:0", "lots_r",
                      "lot:777", "lot_f:777", "rs", "rs_now", "ar", "ar_v:0", "rv", "rv_v:5", "gr", "ad", "tp", "nt",
-                     "bl", "set", "adm", "tpl:555", "lot_c:777", "lot_d:777", "ref:ABCD1234", "rst"]:
+                     "bl", "set", "adm", "tpl:555", "rd", "lot_c:777", "lot_d:777", "ref:ABCD1234", "rst"]:
             self.tg.bot.reset_mock()
             self.press(data)
             errors = [t for t in self.tg_texts() if t.startswith("❌ Ошибка")]
@@ -825,3 +825,14 @@ class TestLotActiveFlag(unittest.TestCase):
                 self.assertEqual(sent["active"], "on")
             self.assertNotIn("deactivate_after_sale[]", sent)
             self.assertNotIn("deactivate_after_sale", sent)
+
+
+class TestSpeedSettings(BotTestCase):
+    def test_runner_delay_setting(self):
+        self.press("rd:3")
+        self.assertEqual(self.storage.setting("runner_delay"), 3)
+
+    def test_status_shows_ping(self):
+        self.c.runner.last_request_ms = 250
+        self.press("st")
+        self.assertTrue(any("Пинг FunPay: 🟢 250 мс" in t for t in self.tg_texts()))
