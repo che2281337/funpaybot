@@ -585,7 +585,7 @@ class PanelMixin:
         rows += [[btn("👥 Администраторы", "adm"), btn("📄 Логи", "logs")],
                  [btn("🔑 Сменить пароль", "pwd"), btn("🍪 Сменить golden_key", "gk")],
                  btn("🧭 Сменить User-Agent", "ua"),
-                 btn(f"🔁 Проверка FunPay: каждые {self.storage.setting('runner_delay', 6)} сек", "rd"),
+                 btn(f"🔁 Проверка FunPay: каждые {self.storage.setting('runner_delay', 4)} сек", "rd"),
                  btn(f"🌐 Прокси (Telegram: {proxy_type(self.storage.get_proxy('telegram'))})", "px"),
                  [btn("🔄 Перезапуск", "rst"), btn(BACK, "menu")]]
         ctx.show("🛠 <b>Настройки</b>\n\n<b>Вечный онлайн</b> — бот постоянно держит аккаунт в сети.\n"
@@ -598,7 +598,7 @@ class PanelMixin:
             ctx.answer(f"✅ Каждые {value} сек")
             self.cb_set(ctx)
             return
-        current = self.storage.setting("runner_delay", 6)
+        current = self.storage.setting("runner_delay", 4)
         options = (2, 3, 4, 6, 10)
         ctx.show("🔁 <b>Как часто проверять новые сообщения и заказы на FunPay?</b>\n\n"
                  "Чем чаще, тем быстрее приходят уведомления и срабатывают автоответы. "
