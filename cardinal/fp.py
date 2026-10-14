@@ -9,6 +9,8 @@ import time
 from typing import Callable
 
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 import FunPayAPI.updater.runner as runner_module
 from FunPayAPI import Account, types
@@ -18,13 +20,23 @@ logger = logging.getLogger("FPC.fp")
 
 
 # ---------------------------------------------------------------------- аккаунт
-def configure_account(account: Account) -> Account:
+CONNECT_TIMEOUT = 5
+READ_TIMEOUT = 20
+
+
+def configure_account(account: Account, use_system_proxy: bool = False) -> Account:
     """
-    - Системный прокси Windows / переменные окружения (их выставляют VPN-программы) для FunPay не используются —
-      только прокси из настроек бота.
+    - Системный прокси Windows / переменные окружения (их выставляют VPN-программы) для FunPay по умолчанию
+      не используются — только прокси из настроек бота (или use_system_proxy=True).
+    - Быстрое обнаружение обрыва: подключение ждём 5 сек (а не 15) и повторяем не 6 раз, а 3.
+      POST-запросы после таймаута чтения не повторяем — иначе сообщение покупателю может уйти дважды.
     - Замеряем время запросов к runner/ (пинг FunPay для статуса).
     """
-    account.session.trust_env = False
+    account.session.trust_env = use_system_proxy
+    account.requests_timeout = (CONNECT_TIMEOUT, READ_TIMEOUT)
+    retry = Retry(total=4, connect=3, read=0, redirect=6, status=3, backoff_factor=0.5,
+                  status_forcelist=[500, 502, 503, 504], allowed_methods={"GET", "POST"})
+    account.session.mount("https://", HTTPAdapter(max_retries=retry))
     account.last_runner_ms = None
     original = account.runner_request
 

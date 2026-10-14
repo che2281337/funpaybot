@@ -741,6 +741,10 @@ class TestFunPayAdapter(unittest.TestCase):
         from cardinal.fp import configure_account
         acc = configure_account(Account("g" * 32))
         self.assertFalse(acc.session.trust_env)  # системный прокси / VPN не используется для FunPay
+        self.assertEqual(acc.requests_timeout, (5, 20))
+        retry = acc.session.get_adapter("https://funpay.com").max_retries
+        self.assertEqual((retry.connect, retry.read), (3, 0))  # POST не повторяется после таймаута чтения
+        self.assertTrue(configure_account(Account("g" * 32), use_system_proxy=True).session.trust_env)
         with unittest.mock.patch.object(Account, "method", return_value=SimpleNamespace(status_code=200)):
             acc.csrf_token = "t"
             acc.runner_request({"objects": [], "request": None})
@@ -782,3 +786,13 @@ class TestLotsWithCardinalApi(BotTestCase):
         self.assertFalse(lots[888]["active"])
         self.assertEqual(lots[888]["title"], "Выключенный лот")
         self.assertEqual(lots[888]["price"], 50.0)
+
+
+class TestFunPaySystemProxyToggle(BotTestCase):
+    def test_toggle(self):
+        self.c.account = SimpleNamespace(session=SimpleNamespace(trust_env=False))
+        self.press("px_sys")
+        self.assertTrue(self.storage.config.data["funpay"]["use_system_proxy"])
+        self.assertTrue(self.c.account.session.trust_env)
+        self.press("px_sys")
+        self.assertFalse(self.c.account.session.trust_env)

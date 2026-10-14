@@ -41,7 +41,8 @@ class Cardinal:
         self.storage = storage
         fp = storage.config.data["funpay"]
         self.account = configure_account(Account(fp["golden_key"], fp.get("user_agent") or None,
-                                                 requests_timeout=15, proxy=to_requests(fp.get("proxy"))))
+                                                 proxy=to_requests(fp.get("proxy"))),
+                                         use_system_proxy=bool(fp.get("use_system_proxy")))
         self.runner: Optional[Runner] = None
         self.tg: Optional[TGBot] = None
         self.lots = LotsManager(self)
@@ -76,7 +77,8 @@ class Cardinal:
                 time.sleep(wait)
 
     def run(self):
-        if (found := system_proxies()) and not self.storage.get_proxy("funpay"):
+        if ((found := system_proxies()) and not self.storage.get_proxy("funpay")
+                and not self.storage.config.data["funpay"].get("use_system_proxy")):
             logger.warning(f"В системе найден прокси (обычно его включает VPN): {mask(next(iter(found.values())))}. "
                            f"Для FunPay он НЕ используется — бот подключается напрямую. "
                            f"Если нужен прокси для FunPay, задайте его в настройках бота.")
@@ -151,6 +153,14 @@ class Cardinal:
         elif self.tg:
             self.tg.apply_proxy()
         logger.info(f"Прокси для {'Telegram' if target == 'telegram' else 'FunPay'}: {mask(proxy)}.")
+
+    def set_funpay_system_proxy(self, enabled: bool):
+        """Ходить на FunPay через системный прокси / VPN (а не напрямую). Применяется сразу."""
+        with self.storage.config.lock:
+            self.storage.config.data["funpay"]["use_system_proxy"] = enabled
+            self.storage.config.save()
+        self.account.session.trust_env = enabled
+        logger.info(f"FunPay через системный прокси / VPN: {'да' if enabled else 'нет'}.")
 
     # ------------------------------------------------------------------ уведомления
     def notify(self, text: str, kind: str = "system", keyboard=None):

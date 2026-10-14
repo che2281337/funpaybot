@@ -48,8 +48,27 @@ def main():
     print(f"Системный прокси (VPN, для FunPay НЕ используется): "
           f"{ {k: mask(v) for k, v in system_proxies().items()} or 'нет'}")
 
-    acc = configure_account(Account(cfg["golden_key"], cfg.get("user_agent") or None, requests_timeout=20,
-                                    proxy=to_requests(cfg.get("proxy"))))
+    print("\nДоступность funpay.com (5 попыток каждым способом):")
+    routes = [("напрямую", False)] + ([("через системный прокси / VPN", True)] if system_proxies() else [])
+    for name, use_system in routes:
+        session = requests.Session()
+        session.trust_env = use_system
+        times, errors = [], 0
+        for _ in range(5):
+            started = time.time()
+            try:
+                session.get("https://funpay.com/", timeout=(5, 15), proxies=to_requests(cfg.get("proxy")) or {})
+                times.append(round((time.time() - started) * 1000))
+            except Exception:
+                errors += 1
+        avg = f"в среднем {sum(times) // len(times)} мс" if times else "ни разу не открылся"
+        print(f"  {'✅' if not errors else '⚠️' if times else '❌'} {name}: {avg}, неудач {errors} из 5")
+    print(f"  Сейчас бот ходит на FunPay: "
+          f"{'через прокси из настроек' if cfg.get('proxy') else 'через системный VPN' if cfg.get('use_system_proxy') else 'напрямую'}")
+
+    acc = configure_account(Account(cfg["golden_key"], cfg.get("user_agent") or None,
+                                    proxy=to_requests(cfg.get("proxy"))),
+                            use_system_proxy=bool(cfg.get("use_system_proxy")))
     secrets = [cfg["golden_key"]]
     print("\nПроверка FunPay:")
     timed("вход в аккаунт", lambda: f"{acc.get(update_phpsessid=True).username} (ID {acc.id})", secrets)
