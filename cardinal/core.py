@@ -18,6 +18,7 @@ from FunPayAPI.common.enums import MessageTypes, OrderStatuses, SubCategoryTypes
 from FunPayAPI.updater import events
 
 from .dispatch import KeyedExecutor
+from .fp import configure_account, install_dynamic_delay
 from .lots import LotsManager
 from .proxy import mask, system_proxies, to_requests
 from .raiser import Raiser
@@ -39,8 +40,8 @@ class Cardinal:
     def __init__(self, storage: Storage):
         self.storage = storage
         fp = storage.config.data["funpay"]
-        self.account = Account(fp["golden_key"], fp.get("user_agent") or None, requests_timeout=15,
-                               proxy=to_requests(fp.get("proxy")))
+        self.account = configure_account(Account(fp["golden_key"], fp.get("user_agent") or None,
+                                                 requests_timeout=15, proxy=to_requests(fp.get("proxy"))))
         self.runner: Optional[Runner] = None
         self.tg: Optional[TGBot] = None
         self.lots = LotsManager(self)
@@ -83,6 +84,8 @@ class Cardinal:
             self.tg.start()
         self.init_account()
         self.runner = Runner(self.account)
+        # Все запросы к runner/ (события, отправка сообщений) идут через очередь этого потока — как в Cardinal.
+        threading.Thread(target=self.runner.loop, name="runner-loop", daemon=True).start()
         threading.Thread(target=self.raiser.loop, name="raiser", daemon=True).start()
         threading.Thread(target=self.online_loop, name="online", daemon=True).start()
         self.notify(f"🟢 <b>Бот запущен</b>\nАккаунт: <b>{esc(self.account.username)}</b>", kind="system")
@@ -114,7 +117,7 @@ class Cardinal:
     def listen(self):
         # Опрос FunPay не ждёт обработку событий: они уходят в пул потоков (по очереди внутри одного чата).
         # Интервал читается на каждом круге — его можно менять из Telegram без перезапуска.
-        for event in self.runner.listen(requests_delay=self.poll_delay):
+        for event in self.runner.listen(requests_delay=install_dynamic_delay(self.poll_delay)):
             if isinstance(event, (events.NewMessageEvent, events.NewOrderEvent)):
                 if not (isinstance(event, events.NewMessageEvent) and event.message.author_id == self.account.id):
                     self.mark_activity()
@@ -308,7 +311,7 @@ class Cardinal:
         found = RegularExpressions().ORDER_ID.search(msg.text or "")
         order_id = found.group(0) if found else ""
         # Убеждаемся, что это наша продажа (а не наша покупка)
-        if self.runner and order_id[1:] not in self.runner.saved_orders:
+        if self.runner and order_id[1:] not in (self.runner.saved_orders or {}):
             return
         if self.tg and self.storage.notify_enabled("order_status"):
             self.tg.broadcast(f"✅ Заказ <b>{esc(order_id)}</b> подтверждён покупателем <b>{esc(msg.chat_name)}</b>.",
@@ -377,12 +380,15 @@ class Cardinal:
         product = "\n".join(goods)
         text = format_text(cfg.get("response", "$product"), username=order.buyer_username, order_id=order.id,
                            order_title=order.description, product=product, chat_name=order.buyer_username)
-        chat = self.get_order_chat(order)
-        if not chat:
+        chat_id = getattr(order, "chat_id", None)
+        if not chat_id:
+            chat = self.get_order_chat(order)
+            chat_id = chat.id if chat else None
+        if not chat_id:
             if goods:
                 self.storage.return_goods(cfg["goods_file"], goods)
             return "❌ Не удалось найти чат с покупателем — товар не выдан."
-        if not self.send_message(chat.id, text, chat.name):
+        if not self.send_message(chat_id, text, order.buyer_username):
             if goods:
                 self.storage.return_goods(cfg["goods_file"], goods)
             return "❌ Не удалось отправить товар (ошибка FunPay). Товар возвращён в файл."

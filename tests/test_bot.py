@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from FunPayAPI import types  # noqa: E402
-from FunPayAPI.common.enums import OrderStatuses, SubCategoryTypes  # noqa: E402
+from FunPayAPI.common.enums import Currency, OrderStatuses, SubCategoryTypes  # noqa: E402
 from FunPayAPI.updater import events  # noqa: E402
 from cardinal.core import Cardinal  # noqa: E402
 from cardinal.storage import Storage, hash_password  # noqa: E402
@@ -33,6 +33,7 @@ class FakeAccount:
         self.username = "Seller"
         self.is_initiated = True
         self.active_sales = 1
+        self.csrf_token = "x"
         self.sent: list[tuple] = []
         self.images: list[tuple] = []
         self.reviews: list[tuple] = []
@@ -40,7 +41,7 @@ class FakeAccount:
         self.deleted: list[int] = []
         self.refunds: list[str] = []
         self.raised: list[tuple] = []
-        self.chats = {555: types.ChatShortcut(555, "Buyer", "привет", True, "")}
+        self.chats = {555: types.ChatShortcut(555, "Buyer", "привет", 0, 0, True, "")}
         cat = types.Category(1, "Dota 2")
         self.subcat = types.SubCategory(10, "Предметы", SubCategoryTypes.COMMON, cat)
         cat.add_subcategory(self.subcat)
@@ -52,7 +53,7 @@ class FakeAccount:
     # --- чаты
     def send_message(self, chat_id, text, chat_name=None, *a, **kw):
         self.sent.append((chat_id, text))
-        return types.Message(1, text, chat_id, chat_name, self.username, ME, "")
+        return types.Message(1, text, chat_id, chat_name, BUYER, self.username, ME, "")
 
     def send_image(self, chat_id, image, chat_name=None, *a, **kw):
         self.images.append((chat_id, image))
@@ -67,13 +68,14 @@ class FakeAccount:
         return self.chats
 
     def get_chat_history(self, chat_id, interlocutor_username=None, **kw):
-        return [types.Message(1, "привет", chat_id, "Buyer", "Buyer", BUYER, "")]
+        return [types.Message(1, "привет", chat_id, "Buyer", BUYER, "Buyer", BUYER, "")]
 
     # --- заказы / отзывы
     def get_order(self, order_id):
-        review = types.Review(5, "Всё супер", None, False, "", order_id)
-        return types.Order(order_id, OrderStatuses.PAID, self.subcat, "Аркана на Pudge", "full", 100.0,
-                           BUYER, "Buyer", ME, self.username, "", review)
+        review = types.Review(5, "Всё супер", None, False, "", False, order_id)
+        fields = {"summary": types.LotField("summary", {"ru": "Аркана на Pudge"})}
+        return types.Order(order_id, OrderStatuses.PAID, self.subcat, None, None, fields, 1, 100.0, Currency.RUB,
+                           None, BUYER, "Buyer", ME, self.username, 555, review, [], "ru")
 
     def get_sells(self, **kw):
         return None, [make_order("ABCD1234")]
@@ -87,12 +89,19 @@ class FakeAccount:
     # --- лоты
     def get_user(self, user_id):
         profile = types.UserProfile(user_id, self.username, "", True, False, "")
-        lot = types.LotShortcut(777, None, "Аркана на Pudge", 100.0, self.subcat, "")
+        lot = types.LotShortcut(777, None, None, "Аркана на Pudge", 5, 100.0, Currency.RUB, self.subcat,
+                                None, False, None, None, "")
         profile.add_lot(lot)
         return profile
 
+    def get_my_subcategory_lots(self, subcategory_id):
+        return [types.MyLotShortcut(777, None, None, "Аркана на Pudge", 5, 100.0, Currency.RUB, self.subcat,
+                                    False, True, ""),
+                types.MyLotShortcut(888, None, None, "Выключенный лот", 1, 50.0, Currency.RUB, self.subcat,
+                                    False, False, "")]
+
     def get_lot_fields(self, lot_id):
-        return types.LotFields(lot_id, dict(self.lot_fields[lot_id]))
+        return types.LotFields(lot_id, dict(self.lot_fields[lot_id]), self.subcat)
 
     def save_lot(self, fields):
         fields.renew_fields()
@@ -103,27 +112,29 @@ class FakeAccount:
     def delete_lot(self, lot_id):
         self.deleted.append(lot_id)
 
-    def get_my_subcategory_lot_ids(self, subcategory_id):
-        return [777, 888]
+    def get_subcategory(self, subcategory_type, subcategory_id):
+        return self.subcat if subcategory_id == self.subcat.id else None
 
-    def get_new_lot_form(self, node_id):
-        fields = types.LotFields(0, {"offer_id": "0", "node_id": str(node_id), "fields[type]": "a"})
-        selects = {"fields[type]": {"label": "Тип", "options": [("a", "Аккаунт"), ("b", "Буст")]}}
-        return fields, selects
+    def method(self, request_method, api_method, headers, payload, **kw):
+        if api_method.startswith("lots/offerEdit?node="):
+            html = ('<form class="form-offer-editor"><input type="hidden" name="csrf_token" value="x">'
+                    '<input type="hidden" name="offer_id" value="0"><input type="hidden" name="node_id" value="1142">'
+                    '<input name="price" value=""><input type="checkbox" name="active" checked>'
+                    '<div class="form-group"><label>Тип</label><select name="fields[type]">'
+                    '<option value="a" selected>Аккаунт</option><option value="b">Буст</option></select></div></form>')
+            return SimpleNamespace(content=html.encode(), status_code=200)
+        raise AssertionError(f"unexpected request {api_method}")
 
     def get_balance(self, lot_id=0):
         return types.Balance(150.5, 100.0, 1.0, 1.0, 0.0, 0.0)
 
-    def raise_lots_raw(self, game_id, node_ids):
-        self.raised.append((game_id, node_ids))
+    def raise_lots(self, category_id, subcategories=None, exclude=None):
+        self.raised.append((category_id, subcategories))
         if len(self.raised) > 1:
             from FunPayAPI.common.exceptions import RaiseError
             response = SimpleNamespace(status_code=200, request=SimpleNamespace(url="", headers={}, body=""))
-            raise RaiseError(response, types.Category(game_id, ""), "Подождите 2 часа.", 7200)
-        return True
-
-    def get_raise_info(self, subcategory_id):
-        return 1
+            raise RaiseError(response, types.Category(category_id, ""), "Подождите 2 часа.", 7200)
+        return None
 
     @property
     def subcategories(self):
@@ -131,12 +142,12 @@ class FakeAccount:
 
 
 def make_order(order_id, description="Аркана на Pudge, 2 шт.", status=OrderStatuses.PAID):
-    return types.OrderShortcut(order_id, description, 200.0, "Buyer", BUYER, status, datetime.datetime.now(),
-                               "Dota 2, Предметы", "")
+    return types.OrderShortcut(order_id, description, 200.0, Currency.RUB, "Buyer", BUYER, 555, status,
+                               datetime.datetime.now(), "Dota 2, Предметы", None, "")
 
 
 def make_msg(text, author_id=BUYER, chat_id=555, msg_id=10):
-    m = types.Message(msg_id, text, chat_id, "Buyer", "Buyer" if author_id else "FunPay", author_id, "",
+    m = types.Message(msg_id, text, chat_id, "Buyer", BUYER, "Buyer" if author_id else "FunPay", author_id, "",
                       determine_msg_type=False)
     m.type = types.MessageTypes.NON_SYSTEM if author_id else m.get_message_type()
     return m
@@ -397,8 +408,8 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(text, "Bob #ABCD1234 https://funpay.com/orders/ABCD1234/")
 
     def test_lot_form_parsing(self):
-        from FunPayAPI.account import Account
-        html = """<form>
+        from cardinal.fp import parse_lot_form, parse_lot_form_selects
+        html = """<html><form><input name="query"></form><form class="form-offer-editor">
             <input type="hidden" name="csrf_token" value="tok">
             <input type="hidden" name="offer_id" value="5">
             <input name="price" value="10">
@@ -408,22 +419,22 @@ class TestUtils(unittest.TestCase):
             <textarea name="fields[desc][ru]">desc</textarea>
             <div class="form-group"><label>Сервер</label>
               <select name="server"><option value="">-</option><option value="1">EU</option></select></div>
+            <div class="form-group hidden"><select name="hidden_one"><option value="z">Z</option></select></div>
             <select name="fields[x]"><option value="a">A</option><option value="b" selected>B</option></select>
-        </form>"""
-        fields = Account._parse_lot_form(html)
+        </form></html>"""
+        fields = parse_lot_form(html)
         self.assertEqual(fields["price"], "10")
         self.assertEqual(fields["active"], "on")
         self.assertNotIn("auto_delivery", fields)
+        self.assertNotIn("query", fields)  # поля шапки сайта не попадают в лот
+        self.assertNotIn("hidden_one", fields)
         self.assertEqual(fields["server"], "")
         self.assertEqual(fields["fields[x]"], "b")
         self.assertEqual(fields["fields[desc][ru]"], "desc")
-        selects = Account._parse_lot_form_selects(html)
+        selects = parse_lot_form_selects(html)
         self.assertEqual(selects["server"]["label"], "Сервер")
         self.assertEqual(selects["server"]["options"], [("1", "EU")])
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestProxy(BotTestCase):
@@ -594,60 +605,6 @@ class TestRealSocks5(unittest.TestCase):
             web.shutdown()
 
 
-class TestRunnerParsing(unittest.TestCase):
-    def _runner(self):
-        from FunPayAPI import Runner
-        acc = FakeAccount()
-        acc.runner = None
-        acc.bot_character = "⁤"
-        acc.add_chats = lambda chats: None
-        acc.get_sells = lambda: (None, [])
-        return Runner(acc)
-
-    def test_chat_without_time_and_odd_objects(self):
-        runner = self._runner()
-        html = ('<a class="contact-item unread" data-id="555"><div class="media-user-name">Buyer</div>'
-                '<div class="contact-item-message">привет</div></a>')
-        events_ = runner.parse_updates({"objects": [
-            {"type": "chat_bookmarks", "tag": "t1", "data": {"html": html}},
-            {"type": "orders_counters", "tag": "t2", "data": False},
-            {"type": "chat_bookmarks", "tag": "t3", "data": False},
-        ]})
-        self.assertEqual(len(events_), 1)
-        self.assertEqual(events_[0].chat.name, "Buyer")
-        self.assertEqual(runner.parse_updates({}), [])
-
-
-class TestSessionCookies(unittest.TestCase):
-    def _response(self, cookies: dict, status=200):
-        import requests
-        r = requests.Response()
-        r.status_code = status
-        r._content = b"{}"
-        r.request = SimpleNamespace(url="https://funpay.com/runner/", headers={}, body="", method="POST")
-        for k, v in cookies.items():
-            r.cookies.set(k, v, domain="funpay.com")
-        return r
-
-    def test_cookies_are_kept_and_phpsessid_rotates(self):
-        from unittest.mock import patch
-        from FunPayAPI import Account
-        acc = Account("g" * 32, "UA")
-        acc.phpsessid = "old"
-        sent = []
-
-        def fake_request(session, method, url, headers=None, **kw):
-            self.assertFalse(session.trust_env)
-            sent.append(headers["cookie"])
-            return self._response({"PHPSESSID": "new", "cf_token": "abc"} if len(sent) == 1 else {})
-        with patch("requests.Session.request", autospec=True, side_effect=fake_request):
-            acc.method("post", "runner/", {}, {})
-            acc.method("post", "runner/", {}, {})
-        base = "golden_key=" + "g" * 32 + "; cookie_prefs=1"
-        self.assertEqual(sent[0], base + "; PHPSESSID=old")
-        self.assertEqual(sent[1], base + "; PHPSESSID=new; cf_token=abc")
-
-
 class TestUserAgent(BotTestCase):
     def test_set_user_agent(self):
         self.acc.get = MagicMock()
@@ -660,114 +617,6 @@ class TestUserAgent(BotTestCase):
         self.assertEqual(self.storage.config.data["funpay"]["user_agent"], ua)
         self.assertEqual(self.acc.user_agent, ua)
         self.acc.get.assert_called_once_with(update_phpsessid=True)
-
-
-class TestRunnerVariants(unittest.TestCase):
-    def test_falls_back_to_working_payload(self):
-        from FunPayAPI import Runner
-        from FunPayAPI.common.exceptions import RequestFailedError
-        acc = FakeAccount()
-        acc.runner = None
-        acc.csrf_token = "t"
-        calls = []
-
-        def method(kind, url, headers, payload, raise_not_200=False):
-            calls.append(payload.get("request", "<нет>"))
-            if payload.get("request") is not False:
-                r = SimpleNamespace(status_code=400, request=SimpleNamespace(url=url, headers={}, body=""))
-                raise RequestFailedError(r)
-            return SimpleNamespace(json=lambda: {"objects": []})
-        acc.method = method
-        runner = Runner(acc)
-        self.assertEqual(runner.get_updates(), {"objects": []})
-        self.assertEqual(calls, ["false", False])
-        self.assertEqual(runner.payload_variant, 1)
-        calls.clear()
-        runner.get_updates()
-        self.assertEqual(calls, [False])
-
-
-class TestSystemProxyIgnored(unittest.TestCase):
-    def test_env_proxy_not_used_for_funpay(self):
-        import http.server
-        import threading
-        from unittest.mock import patch
-        from FunPayAPI import Account
-
-        class Ok(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.send_header("Content-Length", "2")
-                self.end_headers()
-                self.wfile.write(b"ok")
-
-            def log_message(self, *a):
-                pass
-        web = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
-        threading.Thread(target=web.serve_forever, daemon=True).start()
-        bad = "socks5://127.0.0.1:9"  # системный «VPN»-прокси, который не работает
-        env = {"HTTP_PROXY": bad, "HTTPS_PROXY": bad, "ALL_PROXY": bad, "http_proxy": bad, "all_proxy": bad,
-               "NO_PROXY": "", "no_proxy": ""}
-        try:
-            with patch.dict(os.environ, env):
-                acc = Account("g" * 32)
-                r = acc._session().get(f"http://127.0.0.1:{web.server_address[1]}/", proxies={}, timeout=5)
-                self.assertEqual(r.text, "ok")
-        finally:
-            web.shutdown()
-
-
-class TestOfferEditFormats(unittest.TestCase):
-    FORM = ('<form class="form-offer-editor"><input type="hidden" name="offer_id" value="777">'
-            '<input name="price" value="99"><input type="checkbox" name="active" checked></form>')
-
-    def _resp(self, body: str):
-        import requests
-        r = requests.Response()
-        r.status_code = 200
-        r._content = body.encode()
-        r.request = SimpleNamespace(url="", headers={}, body="", method="GET")
-        return r
-
-    def test_json_and_html_page(self):
-        from FunPayAPI import Account
-        import json as _json
-        old = self._resp(_json.dumps({"html": self.FORM}))
-        page = self._resp('<html><div class="user-link-name">Seller</div><form><input name="query"></form>'
-                          + self.FORM + "</html>")
-        for resp in (old, page):
-            fields = Account._parse_lot_form(Account._offer_edit_html(resp))
-            self.assertEqual(fields["price"], "99")
-            self.assertEqual(fields["active"], "on")
-            self.assertNotIn("query", fields)  # поля шапки сайта не попадают в лот
-
-    def test_errors(self):
-        from FunPayAPI import Account
-        from FunPayAPI.common.exceptions import UnauthorizedError
-        with self.assertRaises(UnauthorizedError):
-            Account._offer_edit_html(self._resp("<html>login</html>"))
-        with self.assertRaisesRegex(Exception, "Лот не найден"):
-            Account._offer_edit_html(self._resp('<div class="user-link-name">S</div><p class="lead">Лот не найден</p>'))
-        with self.assertRaisesRegex(Exception, "не JSON"):
-            Account._json(self._resp("<html>oops</html>"))
-
-
-class TestMessageParsing(unittest.TestCase):
-    def _parse(self, html, system=False):
-        from bs4 import BeautifulSoup
-        from FunPayAPI import Account
-        return Account._extract_message(BeautifulSoup(html, "html.parser"), system)
-
-    def test_formats(self):
-        self.assertEqual(self._parse('<div class="chat-msg-text">новый</div>'), ("новый", None))
-        self.assertEqual(self._parse('<div class="message-text">старый</div>'), ("старый", None))
-        self.assertEqual(self._parse('<a class="chat-img-link" href="https://x/i.png"></a>'), (None, "https://x/i.png"))
-        self.assertEqual(self._parse('<div role="alert"> Покупатель X оплатил заказ </div>', True)[0],
-                         "Покупатель X оплатил заказ")
-        # неизвестная разметка: берём текст без ника и даты
-        text, _ = self._parse('<div class="media-user-name">Buyer</div><div class="chat-msg-date">12:00</div>'
-                              '<div class="something-new">привет</div>')
-        self.assertEqual(text, "привет")
 
 
 class TestSendNoDuplicates(BotTestCase):
@@ -795,46 +644,13 @@ class TestSendNoDuplicates(BotTestCase):
         self.assertEqual(len(calls), 2)
 
 
-class TestLotActiveFlag(unittest.TestCase):
-    def form(self, active: bool) -> str:
-        return ('<form><input type="hidden" name="offer_id" value="1"><input name="price" value="10">'
-                f'<input type="checkbox" name="active" {"checked" if active else ""}>'
-                '<input type="checkbox" name="deactivate_after_sale[]" value="1"></form>')
-
-    def test_inactive_lot_detected_and_toggle_roundtrip(self):
-        from unittest.mock import patch
-        from FunPayAPI import Account, types as fp_types
-        for initially_active in (False, True):
-            fields = fp_types.LotFields(1, Account._parse_lot_form(self.form(initially_active)))
-            self.assertEqual(fields.active, initially_active)
-            self.assertFalse(fields.deactivate_after_sale)
-            # переключаем и смотрим, что реально уйдёт в FunPay
-            fields.active = not initially_active
-            acc = Account("g" * 32)
-            acc._Account__initiated = True
-            acc.csrf_token = "t"
-            sent = {}
-
-            def fake_method(method, api, headers, payload, **kw):
-                sent.update(payload)
-                return SimpleNamespace(json=lambda: {})
-            with patch.object(acc, "method", side_effect=fake_method):
-                acc.save_lot(fields)
-            if initially_active:
-                self.assertNotIn("active", sent)  # выключение = поле не отправляется
-            else:
-                self.assertEqual(sent["active"], "on")
-            self.assertNotIn("deactivate_after_sale[]", sent)
-            self.assertNotIn("deactivate_after_sale", sent)
-
-
 class TestSpeedSettings(BotTestCase):
     def test_runner_delay_setting(self):
         self.press("rd:3")
         self.assertEqual(self.storage.setting("runner_delay"), 3)
 
     def test_status_shows_ping(self):
-        self.c.runner.last_request_ms = 250
+        self.acc.last_runner_ms = 250
         self.press("st")
         self.assertTrue(any("Пинг FunPay: 🟢 250 мс" in t for t in self.tg_texts()))
 
@@ -900,3 +716,69 @@ class TestNonBlocking(BotTestCase):
         with open(os.path.join(path, "config.json"), "w", encoding="utf-8") as f:
             json.dump({"settings": {"runner_delay": 6}}, f)
         self.assertEqual(Storage(path).setting("runner_delay"), 4)
+
+
+class TestFunPayAdapter(unittest.TestCase):
+    def test_dynamic_delay_shim(self):
+        import FunPayAPI.updater.runner as runner_module
+        from cardinal import fp
+        original = runner_module.time
+        slept = []
+        try:
+            with unittest.mock.patch("cardinal.fp.time.sleep", side_effect=slept.append):
+                sentinel = fp.install_dynamic_delay(lambda: 3.0)
+                clock = runner_module.time
+                clock.sleep(sentinel - 0.5)  # как в Runner.listen: delay - время итерации (0.5 c)
+                clock.sleep(sentinel)        # ветка после 429
+                clock.sleep(0.1)             # обычные паузы библиотеки не трогаем
+            self.assertEqual(slept, [2.5, 3.0, 0.1])
+            self.assertIs(clock.time, __import__("time").time)
+        finally:
+            runner_module.time = original
+
+    def test_configure_account(self):
+        from FunPayAPI import Account
+        from cardinal.fp import configure_account
+        acc = configure_account(Account("g" * 32))
+        self.assertFalse(acc.session.trust_env)  # системный прокси / VPN не используется для FunPay
+        with unittest.mock.patch.object(Account, "method", return_value=SimpleNamespace(status_code=200)):
+            acc.csrf_token = "t"
+            acc.runner_request({"objects": [], "request": None})
+        self.assertIsInstance(acc.last_runner_ms, int)
+
+    def test_system_proxy_ignored_on_real_request(self):
+        import http.server
+        import threading
+        from FunPayAPI import Account
+        from cardinal.fp import configure_account
+
+        class Ok(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"ok")
+
+            def log_message(self, *a):
+                pass
+        web = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+        threading.Thread(target=web.serve_forever, daemon=True).start()
+        bad = "socks5://127.0.0.1:9"
+        env = {"HTTP_PROXY": bad, "HTTPS_PROXY": bad, "ALL_PROXY": bad, "http_proxy": bad, "all_proxy": bad,
+               "NO_PROXY": "", "no_proxy": ""}
+        try:
+            with unittest.mock.patch.dict(os.environ, env):
+                acc = configure_account(Account("g" * 32))
+                r = acc.session.get(f"http://127.0.0.1:{web.server_address[1]}/", timeout=5)
+                self.assertEqual(r.text, "ok")
+        finally:
+            web.shutdown()
+
+
+class TestLotsWithCardinalApi(BotTestCase):
+    def test_deep_refresh_finds_disabled_lots(self):
+        lots = {lot["id"]: lot for lot in self.c.lots.all_lots(deep=True)}
+        self.assertTrue(lots[777]["active"])
+        self.assertFalse(lots[888]["active"])
+        self.assertEqual(lots[888]["title"], "Выключенный лот")
+        self.assertEqual(lots[888]["price"], 50.0)

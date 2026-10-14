@@ -91,7 +91,8 @@ docker compose up -d --build
 main.py              — запуск и мастер первичной настройки
 cardinal/            — ядро: события FunPay, автоответ, автовыдача, отзывы, автоподнятие, лоты
 tg_bot/              — Telegram-панель (меню, уведомления, лоты, настройки)
-FunPayAPI/           — библиотека для работы с FunPay (форк FunPayAPI by Woopertail, GPL-3.0)
+FunPayAPI/           — библиотека для работы с FunPay из FunPay Cardinal (без изменений, см. FunPayAPI/UPSTREAM.md)
+cardinal/fp.py       — наши дополнения поверх FunPayAPI (создание лота, прокси, интервал опроса)
 storage/             — настройки, автоответы, товары автовыдачи (создаётся при запуске)
 tests/               — тесты (python -m unittest discover tests)
 ```
@@ -104,4 +105,4 @@ tests/               — тесты (python -m unittest discover tests)
 
 ## Лицензия
 
-GPL-3.0. Библиотека `FunPayAPI` основана на [FunPayAPI](https://github.com/woopertail/FunPayAPI) (Woopertail, GPL-3.0).
+GPL-3.0. Библиотека `FunPayAPI` взята из [FunPay Cardinal](https://github.com/sidor0912/FunPayCardinal) (sidor0912), основана на [FunPayAPI](https://github.com/woopertail/FunPayAPI) (Woopertail, GPL-3.0). Чтобы обновить её под новые изменения FunPay, скопируйте папку `FunPayAPI` из свежей версии Cardinal.

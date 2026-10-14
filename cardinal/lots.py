@@ -70,7 +70,7 @@ class LotsManager:
     def all_lots(self, deep: bool = False) -> list[dict]:
         """
         Все известные лоты (активные + неактивные).
-        :param deep: дополнительно просканировать страницы /lots/<id>/trade, чтобы найти выключенные лоты.
+        :param deep: дополнительно загрузить страницы /lots/<id>/trade своих разделов — там видны и выключенные лоты.
         """
         self.profile_lots(force=deep)
         if deep:
@@ -78,21 +78,28 @@ class LotsManager:
                        if e.get("subcategory_id") and not e.get("currency")}
             for subcat_id, sample in subcats.items():
                 try:
-                    ids = self.account.get_my_subcategory_lot_ids(subcat_id)
+                    my_lots = self.account.get_my_subcategory_lots(subcat_id)
                 except Exception:
                     logger.debug(f"Не удалось получить лоты подкатегории {subcat_id}", exc_info=True)
                     continue
-                for lot_id in ids:
-                    entry = self.cache.setdefault(str(lot_id), {})
-                    if "title" not in entry:
-                        entry.update({
-                            "title": f"Лот {lot_id}",
-                            "subcategory_id": subcat_id,
-                            "subcategory_name": sample.get("subcategory_name", ""),
-                            "category_id": sample.get("category_id"),
-                            "active": False,
-                        })
-                time.sleep(0.5)
+                seen = set()
+                for lot in my_lots:
+                    seen.add(str(lot.id))
+                    entry = self.cache.setdefault(str(lot.id), {})
+                    entry.update({
+                        "title": lot.description or entry.get("title") or f"Лот {lot.id}",
+                        "price": lot.price,
+                        "server": lot.server,
+                        "subcategory_id": subcat_id,
+                        "subcategory_name": sample.get("subcategory_name", ""),
+                        "category_id": sample.get("category_id"),
+                        "active": lot.active,
+                    })
+                # лоты этого раздела, которых больше нет на FunPay (удалены на сайте)
+                for lot_id, entry in list(self.cache.items()):
+                    if entry.get("subcategory_id") == subcat_id and lot_id not in seen:
+                        self.cache.pop(lot_id)
+                time.sleep(0.3)
             self.save_cache()
         result = []
         for lot_id, entry in self.cache.items():
@@ -142,7 +149,7 @@ class LotsManager:
         if raw:
             fields.edit_fields(raw)
             # синхронизируем свойства с сырыми полями, чтобы renew_fields их не затёр
-            fields = types.LotFields(lot_id, fields.fields)
+            fields = types.LotFields(lot_id, fields.fields, fields.subcategory, fields.currency)
         self.save(fields)
         return fields
 
@@ -152,7 +159,7 @@ class LotsManager:
         new_fields = dict(fields.fields)
         new_fields["offer_id"] = "0"
         new_fields.pop("deleted", None)
-        self.account.save_lot(types.LotFields(0, new_fields))
+        self.account.save_lot(types.LotFields(0, new_fields, fields.subcategory, fields.currency))
         self._profile_time = 0
 
     def create(self, fields: types.LotFields):
