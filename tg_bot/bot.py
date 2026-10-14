@@ -154,7 +154,7 @@ class TGBot(LotsMixin, PanelMixin, BaseBot):
             tg_ms = round((time.time() - started) * 1000)
         except Exception:
             tg_ms = None
-        fp_ms = getattr(self.c.runner, "last_request_ms", None)
+        fp_ms = getattr(self.c.account, "last_runner_ms", None)
         tg_proxy = self.storage.get_proxy("telegram")
         text = (f"📊 <b>Статус</b>\n\n"
                 f"👤 Аккаунт: <b>{esc(a.username)}</b> (ID {a.id})\n"

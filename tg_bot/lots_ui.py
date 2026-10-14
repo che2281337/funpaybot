@@ -9,6 +9,7 @@ import re
 
 from telebot import types as tg
 
+from cardinal.fp import new_lot_form
 from cardinal.utils import esc, lot_edit_link
 
 from .base import BACK, Ctx, btn, kb, onoff, url_btn
@@ -201,7 +202,7 @@ class LotsMixin:
             self.bot.reply_to(message, "Не нашёл ID раздела. Пример: https://funpay.com/lots/1142/")
             return
         node_id = int(m.group(1))
-        fields, selects = self.c.account.get_new_lot_form(node_id)
+        fields, selects = new_lot_form(self.c.account, node_id)
         select_list = [(name, data["label"], data["options"]) for name, data in selects.items()
                        if len(data["options"]) > 1]
         self.set_state(message.from_user.id, "nl_title", node_id=node_id, fields=fields, selects=select_list,

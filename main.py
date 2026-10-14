@@ -24,6 +24,8 @@ class SecretsFilter(logging.Filter):
         (re.compile(r"\d{6,}:[A-Za-z0-9_-]{30,}"), "<TOKEN>"),
         (re.compile(r"golden_key=[a-z0-9]{32}"), "golden_key=<HIDDEN>"),
         (re.compile(r"PHPSESSID=[A-Za-z0-9]+"), "PHPSESSID=<HIDDEN>"),
+        # цветовые метки из логов FunPayAPI (FunPay Cardinal)
+        (re.compile(r"\$(YELLOW|RESET|RED|GREEN|CYAN|MAGENTA|BLUE|WHITE|BLACK)"), ""),
     )
 
     def filter(self, record: logging.LogRecord) -> bool:
