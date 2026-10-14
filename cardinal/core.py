@@ -17,6 +17,7 @@ from FunPayAPI.common.utils import RegularExpressions
 from FunPayAPI.common.enums import MessageTypes, OrderStatuses, SubCategoryTypes
 from FunPayAPI.updater import events
 
+from .dispatch import KeyedExecutor
 from .lots import LotsManager
 from .proxy import mask, system_proxies, to_requests
 from .raiser import Raiser
@@ -46,6 +47,8 @@ class Cardinal:
         self.raiser = Raiser(self)
         self.start_time = time.time()
         self.balance_lot_id: Optional[int] = None
+        self.dispatcher = KeyedExecutor(max_workers=8)
+        self.last_activity = 0.0
         self.stats = {"messages": 0, "orders": 0, "delivered": 0, "auto_responses": 0, "reviews_answered": 0}
 
     # ------------------------------------------------------------------ запуск
@@ -85,13 +88,37 @@ class Cardinal:
         self.notify(f"🟢 <b>Бот запущен</b>\nАккаунт: <b>{esc(self.account.username)}</b>", kind="system")
         self.listen()
 
+    FAST_MODE_SECONDS = 90
+    FAST_MODE_DELAY = 2.0
+
+    def mark_activity(self):
+        """Идёт переписка / заказ — на время включаем частый опрос FunPay."""
+        self.last_activity = time.time()
+
+    @property
+    def fast_mode(self) -> bool:
+        return time.time() - self.last_activity < self.FAST_MODE_SECONDS
+
+    def poll_delay(self) -> float:
+        base = max(2.0, float(self.storage.setting("runner_delay", 4)))
+        return min(base, self.FAST_MODE_DELAY) if self.fast_mode else base
+
+    @staticmethod
+    def event_key(event) -> object:
+        if isinstance(event, events.NewMessageEvent):
+            return ("chat", event.message.chat_id)
+        if isinstance(event, (events.NewOrderEvent, events.OrderStatusChangedEvent)):
+            return ("order", event.order.buyer_username)
+        return ("other",)
+
     def listen(self):
-        delay = float(self.storage.setting("runner_delay", 6))
-        for event in self.runner.listen(requests_delay=delay):
-            try:
-                self.process_event(event)
-            except Exception:
-                logger.exception("Ошибка при обработке события")
+        # Опрос FunPay не ждёт обработку событий: они уходят в пул потоков (по очереди внутри одного чата).
+        # Интервал читается на каждом круге — его можно менять из Telegram без перезапуска.
+        for event in self.runner.listen(requests_delay=self.poll_delay):
+            if isinstance(event, (events.NewMessageEvent, events.NewOrderEvent)):
+                if not (isinstance(event, events.NewMessageEvent) and event.message.author_id == self.account.id):
+                    self.mark_activity()
+            self.dispatcher.submit(self.event_key(event), self.process_event, event)
 
     def online_loop(self):
         """Вечный онлайн + регулярное обновление сессии (PHPSESSID / csrf)."""
@@ -167,13 +194,17 @@ class Cardinal:
         is_mine = msg.author_id == self.account.id
         is_system = msg.author_id == 0
 
-        # Уведомление в Telegram: шлём одно уведомление на всю пачку сообщений чата.
-        stack = event.stack.get_stack() if event.stack else [event]
-        if stack and stack[-1] is event and self.tg:
-            to_notify = [e.message for e in stack if self._should_notify_message(e.message)]
-            if to_notify:
-                self.tg.notify_new_messages(msg.chat_id, msg.chat_name, to_notify)
+        try:
+            self._handle_message_actions(msg, is_mine, is_system)
+        finally:
+            # Уведомление в Telegram (в фоне) — после ответа покупателю, одно на всю пачку сообщений чата.
+            stack = event.stack.get_stack() if event.stack else [event]
+            if stack and stack[-1] is event and self.tg:
+                to_notify = [e.message for e in stack if self._should_notify_message(e.message)]
+                if to_notify:
+                    self.tg.notify_new_messages(msg.chat_id, msg.chat_name, to_notify)
 
+    def _handle_message_actions(self, msg: types.Message, is_mine: bool, is_system: bool):
         if is_system:
             if msg.type in REVIEW_TYPES:
                 threading.Thread(target=self.handle_review, args=(msg,), daemon=True).start()
@@ -187,8 +218,9 @@ class Cardinal:
         if not (blacklisted and self.storage.setting("blacklist_block_response")):
             self.handle_greeting(msg)
             self.handle_command(msg)
-        self.storage.old_users.data[str(msg.chat_id)] = time.time()
-        self.storage.old_users.save()
+        with self.storage.old_users.lock:
+            self.storage.old_users.data[str(msg.chat_id)] = time.time()
+            self.storage.old_users.save()
 
     def _should_notify_message(self, msg: types.Message) -> bool:
         if not self.storage.notify_enabled("messages"):

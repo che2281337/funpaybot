@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
 import time
 from collections import OrderedDict
@@ -67,12 +68,17 @@ class Ctx:
         self.call = call
 
     def answer(self, text: str = "", alert: bool = False):
+        """Убирает «часики» с кнопки. Делается в фоне, чтобы не ждать лишний запрос к Telegram."""
         if self.call:
-            try:
-                self.bot.answer_callback_query(self.call.id, text[:200], show_alert=alert)
-            except Exception:
-                pass
+            call_id = self.call.id
             self.call = None
+
+            def send():
+                try:
+                    self.bot.answer_callback_query(call_id, text[:200], show_alert=alert)
+                except Exception:
+                    pass
+            threading.Thread(target=send, daemon=True).start()
 
     def show(self, text: str, markup: Optional[tg.InlineKeyboardMarkup] = None, new: bool = False):
         """Редактирует текущее сообщение с меню (если это нажатие кнопки), иначе отправляет новое."""
@@ -107,6 +113,9 @@ class BaseBot:
         self.callbacks: dict[str, Callable] = {}
         self.state_handlers: dict[str, Callable] = {}
         self.login_attempts: dict[int, list[float]] = {}
+        self.outbox: queue.Queue = queue.Queue()
+        self.async_send = True
+        threading.Thread(target=self._outbox_worker, name="tg-outbox", daemon=True).start()
         self._register_base()
 
     def apply_proxy(self):
@@ -268,6 +277,7 @@ class BaseBot:
             key = (message.chat.id, message.reply_to_message.message_id)
             if key in self.reply_map:
                 chat_id, chat_name = self.reply_map[key]
+                self.c.mark_activity()
                 self.send_to_funpay(message, chat_id, chat_name)
                 return
 
@@ -339,6 +349,26 @@ class BaseBot:
         return None
 
     def broadcast(self, text: str, keyboard=None, reply_to_chat: Optional[tuple[int, str]] = None):
+        """
+        Рассылка админам. По умолчанию — в фоне через очередь: обработка FunPay-событий не ждёт Telegram
+        (медленный прокси больше не тормозит ответы покупателям).
+        """
+        if self.async_send:
+            self.outbox.put((text, keyboard, reply_to_chat))
+        else:
+            self._broadcast_now(text, keyboard, reply_to_chat)
+
+    def _outbox_worker(self):
+        while True:
+            text, keyboard, reply_to_chat = self.outbox.get()
+            try:
+                self._broadcast_now(text, keyboard, reply_to_chat)
+            except Exception:
+                logger.exception("Ошибка отправки уведомления в Telegram")
+            finally:
+                self.outbox.task_done()
+
+    def _broadcast_now(self, text: str, keyboard=None, reply_to_chat: Optional[tuple[int, str]] = None):
         parts = split_text(text)
         for admin in list(self.storage.admins):
             for i, part in enumerate(parts):

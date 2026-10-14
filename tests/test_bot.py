@@ -159,6 +159,7 @@ class BotTestCase(unittest.TestCase):
 
         from tg_bot.bot import TGBot
         self.tg = TGBot(self.c)
+        self.tg.async_send = False  # в тестах проверяем отправку сразу
         self.c.tg = self.tg
         self.tg.bot = MagicMock()
         sent_counter = iter(range(1000, 100000))
@@ -295,7 +296,7 @@ class TestTelegram(BotTestCase):
     def test_all_menus_render(self):
         for data in ["menu", "st", "bal", "chats", "chat:555", "orders", "ord:ABCD1234", "lots:0", "lots_r",
                      "lot:777", "lot_f:777", "rs", "rs_now", "ar", "ar_v:0", "rv", "rv_v:5", "gr", "ad", "tp", "nt",
-                     "bl", "set", "adm", "tpl:555", "lot_c:777", "lot_d:777", "ref:ABCD1234", "rst"]:
+                     "bl", "set", "adm", "tpl:555", "rd", "lot_c:777", "lot_d:777", "ref:ABCD1234", "rst"]:
             self.tg.bot.reset_mock()
             self.press(data)
             errors = [t for t in self.tg_texts() if t.startswith("❌ Ошибка")]
@@ -825,3 +826,77 @@ class TestLotActiveFlag(unittest.TestCase):
                 self.assertEqual(sent["active"], "on")
             self.assertNotIn("deactivate_after_sale[]", sent)
             self.assertNotIn("deactivate_after_sale", sent)
+
+
+class TestSpeedSettings(BotTestCase):
+    def test_runner_delay_setting(self):
+        self.press("rd:3")
+        self.assertEqual(self.storage.setting("runner_delay"), 3)
+
+    def test_status_shows_ping(self):
+        self.c.runner.last_request_ms = 250
+        self.press("st")
+        self.assertTrue(any("Пинг FunPay: 🟢 250 мс" in t for t in self.tg_texts()))
+
+
+class TestSpeed(unittest.TestCase):
+    def test_keyed_executor_order_and_parallelism(self):
+        import threading
+        import time as _time
+        from cardinal.dispatch import KeyedExecutor
+        ex = KeyedExecutor(max_workers=4)
+        log = []
+        slow_started = threading.Event()
+
+        def slow(tag):
+            slow_started.set()
+            _time.sleep(0.3)
+            log.append(tag)
+
+        def fast(tag):
+            log.append(tag)
+        ex.submit("chatA", slow, "A1")
+        ex.submit("chatA", fast, "A2")  # должен выполниться строго после A1
+        slow_started.wait(1)
+        ex.submit("chatB", fast, "B1")  # другой чат не ждёт медленный chatA
+        _time.sleep(0.1)
+        self.assertEqual(log, ["B1"])
+        ex.shutdown(wait=True)
+        _time.sleep(0.4)
+        self.assertEqual(log, ["B1", "A1", "A2"])
+
+
+class TestNonBlocking(BotTestCase):
+    def test_reply_before_notification_and_async_telegram(self):
+        import time as _time
+        order = []
+        self.acc.send_message = lambda chat_id, text, *a, **kw: order.append("funpay")
+        self.tg.async_send = True
+
+        def slow_tg(*a, **kw):
+            _time.sleep(0.5)
+            order.append("telegram")
+            return SimpleNamespace(chat=SimpleNamespace(id=42), message_id=1)
+        self.tg.bot.send_message.side_effect = slow_tg
+        started = _time.time()
+        self.c.process_event(self.new_message_event(make_msg("!помощь")))
+        self.assertLess(_time.time() - started, 0.3)  # обработка не ждёт Telegram
+        self.tg.outbox.join()
+        self.assertEqual(order[0], "funpay")  # покупателю ответили раньше, чем ушло уведомление
+        self.assertIn("telegram", order)
+
+    def test_fast_mode(self):
+        self.storage.set_setting("runner_delay", 6)
+        self.assertEqual(self.c.poll_delay(), 6)
+        self.c.mark_activity()
+        self.assertEqual(self.c.poll_delay(), 2.0)
+        self.c.last_activity -= 1000
+        self.assertEqual(self.c.poll_delay(), 6)
+
+    def test_old_default_delay_migrated(self):
+        import json
+        path = os.path.join(self.tmp, "old_delay")
+        os.makedirs(path)
+        with open(os.path.join(path, "config.json"), "w", encoding="utf-8") as f:
+            json.dump({"settings": {"runner_delay": 6}}, f)
+        self.assertEqual(Storage(path).setting("runner_delay"), 4)

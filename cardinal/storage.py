@@ -40,7 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "order_confirm_reply": False,
         "order_confirm_text": "$username, спасибо за подтверждение заказа $order_id! Буду рад отзыву ⭐",
         "eternal_online": True,
-        "runner_delay": 6,
+        "runner_delay": 4,
         "blacklist": [],
         "blacklist_block_delivery": True,
         "blacklist_block_response": True,
@@ -152,6 +152,13 @@ class Storage:
         if "use_proxy" in cfg["telegram"]:
             if cfg["telegram"].pop("use_proxy") and cfg["funpay"].get("proxy") and not cfg["telegram"].get("proxy"):
                 cfg["telegram"]["proxy"] = cfg["funpay"]["proxy"]
+            self.config.save()
+        # старое значение по умолчанию (6 сек) меняем на новое (4 сек) один раз
+        settings = cfg["settings"]
+        if not settings.get("_runner_delay_v2"):
+            if settings.get("runner_delay") == 6:
+                settings["runner_delay"] = 4
+            settings["_runner_delay_v2"] = True
             self.config.save()
 
     def _apply_env(self):
