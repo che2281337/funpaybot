@@ -72,7 +72,7 @@ class PanelMixin:
             "rst": self.cb_restart, "rsty": self.cb_restart_yes,
             # прокси
             "px": self.cb_px, "px_set": self.cb_px_set, "px_ty": self.cb_px_type, "px_chk": self.cb_px_check,
-            "px_off": self.cb_px_off, "px_offy": self.cb_px_off_yes,
+            "px_off": self.cb_px_off, "px_offy": self.cb_px_off_yes, "px_sys": self.cb_px_system,
             "px_force": self.cb_px_force,
         })
         self.register_states({
@@ -717,15 +717,18 @@ class PanelMixin:
     def cb_px(self, ctx: Ctx):
         tg_proxy = self.storage.get_proxy("telegram")
         fp_proxy = self.storage.get_proxy("funpay")
+        fp_system = bool(self.storage.config.data["funpay"].get("use_system_proxy"))
         rows = [[btn("✏️ Прокси для Telegram", "px_set:tg")]
                 + ([btn("🗑 Убрать", "px_off:tg")] if tg_proxy else []),
                 [btn("✏️ Прокси для FunPay", "px_set:fp")]
                 + ([btn("🗑 Убрать", "px_off:fp")] if fp_proxy else []),
                 [btn("🧪 Проверить Telegram", "px_chk:tg"), btn("🧪 Проверить FunPay", "px_chk:fp")],
+                btn(f"{onoff(fp_system)} FunPay через системный VPN", "px_sys"),
                 btn(BACK, "set")]
         tg_line = (f"<code>{esc(mask(tg_proxy))}</code> ({proxy_type(tg_proxy)})" if tg_proxy
                    else "не задан — системное подключение (VPN, если включён)")
-        fp_line = f"<code>{esc(mask(fp_proxy))}</code> ({proxy_type(fp_proxy)})" if fp_proxy else "напрямую (без прокси)"
+        fp_line = (f"<code>{esc(mask(fp_proxy))}</code> ({proxy_type(fp_proxy)})" if fp_proxy
+                   else "через системное подключение (VPN, если включён)" if fp_system else "напрямую (без прокси и VPN)")
         ctx.show(f"🌐 <b>Прокси</b>\n\n"
                  f"📱 <b>Telegram:</b> {tg_line}\n"
                  f"🛒 <b>FunPay:</b> {fp_line}\n\n"
@@ -819,6 +822,12 @@ class PanelMixin:
                                                      "системное подключение" if target == "tg" else "напрямую")
         ctx.show(f"<b>{title}</b>\n" + self._px_report(proxy, res),
                  kb([btn("🔄 Ещё раз", f"px_chk:{target}"), btn(BACK, "px")]))
+
+    def cb_px_system(self, ctx: Ctx):
+        enabled = not self.storage.config.data["funpay"].get("use_system_proxy")
+        self.c.set_funpay_system_proxy(enabled)
+        ctx.answer("FunPay теперь через системный VPN" if enabled else "FunPay теперь напрямую")
+        self.cb_px(ctx)
 
     def cb_px_off(self, ctx: Ctx, target: str):
         warn = ("\n\n⚠️ Если Telegram у вас заблокирован, без прокси бот потеряет связь. "
