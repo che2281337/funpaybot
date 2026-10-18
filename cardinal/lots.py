@@ -162,10 +162,6 @@ class LotsManager:
         self.account.save_lot(types.LotFields(0, new_fields, fields.subcategory, fields.currency))
         self._profile_time = 0
 
-    def create(self, fields: types.LotFields):
-        self.account.save_lot(fields)
-        self._profile_time = 0
-
     def delete(self, lot_id: int):
         self.account.delete_lot(lot_id)
         self.cache.pop(str(lot_id), None)

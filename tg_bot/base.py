@@ -45,7 +45,7 @@ def onoff(value: Any) -> str:
 
 
 BACK = "⬅️ Назад"
-KEEP_STATE_PREFIXES = ("noop", "nls:", "nlskip", "nlc")
+KEEP_STATE_PREFIXES = ("noop",)
 MAIN_REPLY_BUTTONS = {
     "💬 Чаты": "chats",
     "🛒 Заказы": "orders",

@@ -307,7 +307,7 @@ class TestTelegram(BotTestCase):
     def test_all_menus_render(self):
         for data in ["menu", "st", "bal", "chats", "chat:555", "orders", "ord:ABCD1234", "lots:0", "lots_r",
                      "lot:777", "lot_f:777", "rs", "rs_now", "ar", "ar_v:0", "rv", "rv_v:5", "gr", "ad", "tp", "nt",
-                     "bl", "set", "adm", "tpl:555", "rd", "lot_c:777", "lot_d:777", "ref:ABCD1234", "rst"]:
+                     "bl", "set", "adm", "tpl:555", "rd", "lot_open", "lot_c:777", "lot_d:777", "ref:ABCD1234", "rst"]:
             self.tg.bot.reset_mock()
             self.press(data)
             errors = [t for t in self.tg_texts() if t.startswith("❌ Ошибка")]
@@ -355,21 +355,6 @@ class TestTelegram(BotTestCase):
         self.press("lot_dy:777")
         self.assertEqual(self.acc.deleted, [777])
 
-    def test_new_lot_wizard(self):
-        self.press("lot_new")
-        self.type_text("https://funpay.com/lots/1142/")
-        self.type_text("Буст рейтинга")
-        self.type_text("Подробно")
-        self.type_text("500")
-        self.type_text("-")
-        self.press("nls:1")
-        self.press("nlc")
-        created = self.acc.saved_lots[-1]
-        self.assertEqual(created.fields["node_id"], "1142")
-        self.assertEqual(created.fields["fields[type]"], "b")
-        self.assertEqual(created.title_ru, "Буст рейтинга")
-        self.assertEqual(created.price, 500.0)
-        self.assertTrue(created.active)
 
     def test_auto_response_crud(self):
         self.press("ar_add")
@@ -406,34 +391,6 @@ class TestUtils(unittest.TestCase):
     def test_format_text(self):
         text = format_text("$username $order_id $order_link", username="Bob", order_id="ABCD1234")
         self.assertEqual(text, "Bob #ABCD1234 https://funpay.com/orders/ABCD1234/")
-
-    def test_lot_form_parsing(self):
-        from cardinal.fp import parse_lot_form, parse_lot_form_selects
-        html = """<html><form><input name="query"></form><form class="form-offer-editor">
-            <input type="hidden" name="csrf_token" value="tok">
-            <input type="hidden" name="offer_id" value="5">
-            <input name="price" value="10">
-            <input type="checkbox" name="active" checked>
-            <input type="checkbox" name="auto_delivery">
-            <input type="submit">
-            <textarea name="fields[desc][ru]">desc</textarea>
-            <div class="form-group"><label>Сервер</label>
-              <select name="server"><option value="">-</option><option value="1">EU</option></select></div>
-            <div class="form-group hidden"><select name="hidden_one"><option value="z">Z</option></select></div>
-            <select name="fields[x]"><option value="a">A</option><option value="b" selected>B</option></select>
-        </form></html>"""
-        fields = parse_lot_form(html)
-        self.assertEqual(fields["price"], "10")
-        self.assertEqual(fields["active"], "on")
-        self.assertNotIn("auto_delivery", fields)
-        self.assertNotIn("query", fields)  # поля шапки сайта не попадают в лот
-        self.assertNotIn("hidden_one", fields)
-        self.assertEqual(fields["server"], "")
-        self.assertEqual(fields["fields[x]"], "b")
-        self.assertEqual(fields["fields[desc][ru]"], "desc")
-        selects = parse_lot_form_selects(html)
-        self.assertEqual(selects["server"]["label"], "Сервер")
-        self.assertEqual(selects["server"]["options"], [("1", "EU")])
 
 
 
